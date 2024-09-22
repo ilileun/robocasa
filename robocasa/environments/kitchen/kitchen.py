@@ -15,8 +15,7 @@ from robosuite.utils.mjcf_utils import (
 )
 from robosuite.utils.observables import Observable, sensor
 from robosuite.environments.base import EnvMeta
-from scipy.spatial.transform import Rotation
-
+from scipy.spatial.transform import Rotation, Slerp
 import robocasa
 import robocasa.macros as macros
 import robocasa.utils.camera_utils as CamUtils
@@ -944,6 +943,8 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             elif "eye_in_hand" in camera:
                 pos_noise = np.zeros_like(pos_noise)
                 euler_noise = np.zeros_like(euler_noise)
+                # pos_noise = self.rng.normal(loc=0, scale=0.05, size=(1, 3))[0]
+                # euler_noise = self.rng.normal(loc=0, scale=3, size=(1, 3))[0]
             else:
                 # skip randomization for cameras not implemented
                 continue
@@ -1205,6 +1206,117 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
 
         return sensors, names
 
+    def _update_camera_poses(self):
+        """
+        실시간으로 카메라 포즈를 업데이트
+        """
+        for camera in self._cam_configs:
+            if "agentview" in camera:
+                # 카메라 이동 범위 설정
+                pos_range_x = (-0.8, 0.8)
+                pos_range_y = (-0.5, 0.5)
+                pos_range_z = (-0.3, 0.3)
+                # euler_range_x = (-5, 5)
+                euler_range_x = (-0, 0)  # 카메라가 우/왼 꺽이지 않음
+                euler_range_y = (-3, 3)
+                euler_range_z = (-5, 5)
+
+                # 카메라 이동 속도 범위 설정
+                pos_speed_range = (0.01, 0.1)
+                euler_speed_range = (0.1, 1.0)
+
+                # 부드러운 이동을 위한 가속도 설정
+                # pos_acceleration = 0.05
+                # euler_acceleration = 0.5
+                pos_acceleration = 0.5
+                euler_acceleration = 5.0
+
+                # 이전 프레임의 이동 속도를 고려하여 현재 이동 속도 계산
+                if not hasattr(self, "prev_pos_speed"):
+                    self.prev_pos_speed = np.zeros(3)
+                    self.prev_euler_speed = np.zeros(3)
+
+                pos_speed = self.prev_pos_speed + pos_acceleration * self.rng.uniform(
+                    -1, 1, size=3
+                )
+                euler_speed = (
+                    self.prev_euler_speed
+                    + euler_acceleration * self.rng.uniform(-1, 1, size=3)
+                )
+
+                pos_speed = np.clip(pos_speed, pos_speed_range[0], pos_speed_range[1])
+                euler_speed = np.clip(
+                    euler_speed, euler_speed_range[0], euler_speed_range[1]
+                )
+
+                self.prev_pos_speed = pos_speed
+                self.prev_euler_speed = euler_speed
+
+                # 한 번에 이동할 값 랜덤 설정
+                pos_delta = np.array(
+                    [
+                        self.rng.uniform(pos_range_x[0], pos_range_x[1]),
+                        self.rng.uniform(pos_range_y[0], pos_range_y[1]),
+                        self.rng.uniform(pos_range_z[0], pos_range_z[1]),
+                    ]
+                )
+                euler_delta = np.array(
+                    [
+                        self.rng.uniform(euler_range_x[0], euler_range_x[1]),
+                        self.rng.uniform(euler_range_y[0], euler_range_y[1]),
+                        self.rng.uniform(euler_range_z[0], euler_range_z[1]),
+                    ]
+                )
+
+                # 천장과 바닥을 보이지 않게 하기 위해 pitch 각도 제한
+                pitch_limit = (-30, 30)
+                old_euler = Rotation.from_quat(
+                    self._cam_configs[camera]["quat"]
+                ).as_euler("xyz", degrees=True)
+                new_euler = old_euler + euler_delta * euler_speed
+                new_euler[1] = np.clip(new_euler[1], pitch_limit[0], pitch_limit[1])
+
+                old_pos = self._cam_configs[camera]["pos"]
+                new_pos = old_pos + pos_delta * pos_speed
+                self._cam_configs[camera]["pos"] = list(new_pos)
+
+                new_quat = Rotation.from_euler("xyz", new_euler, degrees=True).as_quat()
+                self._cam_configs[camera]["quat"] = list(new_quat)
+
+    def _apply_camera_updates(self):
+        """
+        카메라 설정을 시뮬레이션에 적용
+        """
+        for camera in self._cam_configs:
+            if "agentview" in camera:
+                camera_id = self.sim.model.camera_name2id(camera)
+
+                # 현재 카메라 포즈
+                current_pos = self.sim.model.cam_pos[camera_id]
+                current_quat = self.sim.model.cam_quat[camera_id]
+
+                # 목표 카메라 포즈
+                target_pos = self._cam_configs[camera]["pos"]
+                target_quat = self._cam_configs[camera]["quat"]
+
+                # 보간 계수 (0.0 ~ 1.0)
+                interpolation_factor = 0.1
+
+                # 현재 포즈와 목표 포즈 사이를 선형 보간
+                new_pos = current_pos + interpolation_factor * (
+                    np.array(target_pos) - current_pos
+                )
+
+                # 회전 보간을 위한 Slerp 객체 생성
+                rot_slerp = Slerp(
+                    [0, 1], Rotation.from_quat([current_quat, target_quat])
+                )
+                new_quat = rot_slerp(interpolation_factor).as_quat()
+
+                # 시뮬레이션에 새로운 카메라 포즈 적용
+                self.sim.model.cam_pos[camera_id] = new_pos
+                self.sim.model.cam_quat[camera_id] = new_quat
+
     def _post_action(self, action):
         """
         Do any housekeeping after taking an action.
@@ -1220,8 +1332,15 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         """
         reward, done, info = super()._post_action(action)
 
+        # 카메라 포즈를 실시간으로 업데이트
+        self._update_camera_poses()
+
+        # 카메라 설정을 시뮬레이션에 적용
+        self._apply_camera_updates()
+
         # Check if stove is turned on or not
         self.update_state()
+
         return reward, done, info
 
     def convert_rel_to_abs_action(self, rel_action):

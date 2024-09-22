@@ -91,7 +91,7 @@ if __name__ == "__main__":
         "env_name": args.task,
         "robots": "PandaMobile",
         "controller_configs": load_controller_config(default_controller="OSC_POSE"),
-        "translucent_robot": False,
+        "translucent_robot": True,
     }
 
     args.renderer = "mjviewer"
