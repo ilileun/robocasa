@@ -244,7 +244,6 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         # self.initial_pos = [-1,0,0]
         self.waypoints = self.generate_waypoints(0, 4, 0.05)
         self.current_waypoint_index = 0
-        # self._cam_configs["agentview"]["pos"] = self.initial_pos
 
         self.init_robot_base_pos = init_robot_base_pos
 
@@ -330,45 +329,6 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             renderer_config=renderer_config,
             seed=seed,
         )
-
-    def log_positions(self):
-        for camera in self._cam_configs:
-            if "agentview" in camera:
-                camera_id = self.sim.model.camera_name2id(camera)
-                camera_pos = self.sim.model.cam_pos[camera_id]
-                logging.info(f"Camera '{camera}' position: {camera_pos}")
-
-        for robot in self.robots:
-            robot_base_pos = robot.robot_model
-            logging.info(f"Robot '{robot.name}' base position: {robot_base_pos}")
-
-        # 월드 원점과의 거리 계산
-        world_origin = np.array([0, 0, 0])
-        for camera in self._cam_configs:
-            if "agentview" in camera:
-                camera_id = self.sim.model.camera_name2id(camera)
-                camera_pos = self.sim.model.cam_pos[camera_id]
-                distance = np.linalg.norm(camera_pos - world_origin)
-                logging.info(
-                    f"Distance from camera '{camera}' to world origin: {distance}"
-                )
-
-        # for robot in self.robots:
-        #     robot_base_pos = robot.robot_model
-        #     distance = np.linalg.norm(robot_base_pos - world_origin)
-        #     logging.info(f"Distance from robot '{robot.name}' base to world origin: {distance}")
-
-    # Kitchen 클래스에 추가할 디버깅 메서드
-    def debug_camera_directions(self):
-        for camera_name, camera_config in self._cam_configs.items():
-            quat = camera_config["quat"]
-            rotation = Rotation.from_quat(quat)
-            camera_direction = rotation.apply([0, 0, -1])  # 카메라는 -z 방향을 바라봄
-
-            logging.info(f"Camera: {camera_name}")
-            logging.info(f"Position: {camera_config['pos']}")
-            logging.info(f"Direction: {camera_direction}")
-            logging.info("---")
 
     def _load_model(self):
         """
@@ -1137,36 +1097,6 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
 
         return result
 
-    def _extract_layout_info(self):
-        logging.debug(f"Extracting layout information for layout_id: {self.layout_id}")
-        layout_id, style_id = self.layout_and_style_ids[0]
-        layout_path = get_layout_path(layout_id=int(layout_id))
-
-        with open(layout_path, "r") as file:
-            layout_data = yaml.safe_load(file)
-
-        main_group = layout_data.get("main_group", {})
-        self.layout_objects = {"bottom_row": [], "top_row": []}
-
-        for category in ["bottom_row", "top_row"]:
-            for obj in main_group.get(category, []):
-                obj_info = {
-                    "name": obj.get("name"),
-                    "type": obj.get("type"),
-                    "pos": obj.get("pos"),
-                    "size": obj.get("size"),
-                    "align_to": obj.get("align_to"),
-                    "side": obj.get("side"),
-                    "alignment": obj.get("alignment"),
-                }
-
-                # Remove None values
-                obj_info = {k: v for k, v in obj_info.items() if v is not None}
-
-                self.layout_objects[category].append(obj_info)
-
-        logging.debug(f"Extracted layout information: {self.layout_objects}")
-
     def _setup_references(self):
         """
         Sets up references to important components. A reference is typically an
@@ -1300,6 +1230,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
 
         return sensors, names
 
+    # 기존 one_wall 꺼..
     def generate_waypoints(self, start, end, step):
         waypoints = []
         current = start
@@ -1336,133 +1267,39 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                 camera_id = self.sim.model.camera_name2id(camera)
                 self.sim.model.cam_pos[camera_id] = self._cam_configs[camera]["pos"]
 
-    # def _update_camera_poses(self):
-    #     """
-    #     실시간으로 카메라 포즈를 업데이트
-    #     """
-    #     for camera in self._cam_configs:
-    #         if "agentview" in camera:
-    #             # 카메라 이동 범위 설정
-    #             pos_range_x = (-0.8, 0.8)
-    #             pos_range_y = (-0.5, 0.5)
-    #             pos_range_z = (-0.3, 0.3)
-    #             # euler_range_x = (-5, 5)
-    #             euler_range_x = (-0, 0)  # 카메라가 우/왼 꺽이지 않음
-    #             euler_range_y = (-3, 3)
-    #             euler_range_z = (-5, 5)
+    def log_positions(self):
+        for camera in self._cam_configs:
+            if "agentview" in camera:
+                camera_id = self.sim.model.camera_name2id(camera)
+                camera_pos = self.sim.model.cam_pos[camera_id]
+                logging.info(f"Camera '{camera}' position: {camera_pos}")
 
-    #             # 카메라 이동 속도 범위 설정
-    #             pos_speed_range = (0.01, 0.1)
-    #             euler_speed_range = (0.1, 1.0)
+        for robot in self.robots:
+            robot_base_pos = robot.robot_model
+            logging.info(f"Robot '{robot.name}' base position: {robot_base_pos}")
 
-    #             # 부드러운 이동을 위한 가속도 설정
-    #             # pos_acceleration = 0.05
-    #             # euler_acceleration = 0.5
-    #             pos_acceleration = 0.5
-    #             euler_acceleration = 5.0
+        # 월드 원점과의 거리 계산
+        world_origin = np.array([0, 0, 0])
+        for camera in self._cam_configs:
+            if "agentview" in camera:
+                camera_id = self.sim.model.camera_name2id(camera)
+                camera_pos = self.sim.model.cam_pos[camera_id]
+                distance = np.linalg.norm(camera_pos - world_origin)
+                logging.info(
+                    f"Distance from camera '{camera}' to world origin: {distance}"
+                )
 
-    #             # 이전 프레임의 이동 속도를 고려하여 현재 이동 속도 계산
-    #             if not hasattr(self, "prev_pos_speed"):
-    #                 self.prev_pos_speed = np.zeros(3)
-    #                 self.prev_euler_speed = np.zeros(3)
+    # Kitchen 클래스에 추가할 디버깅 메서드
+    def debug_camera_directions(self):
+        for camera_name, camera_config in self._cam_configs.items():
+            quat = camera_config["quat"]
+            rotation = Rotation.from_quat(quat)
+            camera_direction = rotation.apply([0, 0, -1])  # 카메라는 -z 방향을 바라봄
 
-    #             pos_speed = self.prev_pos_speed + pos_acceleration * self.rng.uniform(
-    #                 -1, 1, size=3
-    #             )
-    #             euler_speed = (
-    #                 self.prev_euler_speed
-    #                 + euler_acceleration * self.rng.uniform(-1, 1, size=3)
-    #             )
-
-    #             pos_speed = np.clip(pos_speed, pos_speed_range[0], pos_speed_range[1])
-    #             euler_speed = np.clip(
-    #                 euler_speed, euler_speed_range[0], euler_speed_range[1]
-    #             )
-
-    #             self.prev_pos_speed = pos_speed
-    #             self.prev_euler_speed = euler_speed
-
-    #             # 한 번에 이동할 값 랜덤 설정
-    #             pos_delta = np.array(
-    #                 [
-    #                     self.rng.uniform(pos_range_x[0], pos_range_x[1]),
-    #                     self.rng.uniform(pos_range_y[0], pos_range_y[1]),
-    #                     self.rng.uniform(pos_range_z[0], pos_range_z[1]),
-    #                 ]
-    #             )
-    #             euler_delta = np.array(
-    #                 [
-    #                     self.rng.uniform(euler_range_x[0], euler_range_x[1]),
-    #                     self.rng.uniform(euler_range_y[0], euler_range_y[1]),
-    #                     self.rng.uniform(euler_range_z[0], euler_range_z[1]),
-    #                 ]
-    #             )
-
-    #             # 천장과 바닥을 보이지 않게 하기 위해 pitch 각도 제한
-    #             pitch_limit = (-30, 30)
-    #             old_euler = Rotation.from_quat(
-    #                 self._cam_configs[camera]["quat"]
-    #             ).as_euler("xyz", degrees=True)
-    #             new_euler = old_euler + euler_delta * euler_speed
-    #             new_euler[1] = np.clip(new_euler[1], pitch_limit[0], pitch_limit[1])
-
-    #             old_pos = self._cam_configs[camera]["pos"]
-    #             new_pos = old_pos + pos_delta * pos_speed
-    #             self._cam_configs[camera]["pos"] = list(new_pos)
-
-    #             new_quat = Rotation.from_euler("xyz", new_euler, degrees=True).as_quat()
-    #             self._cam_configs[camera]["quat"] = list(new_quat)
-
-    # def _apply_camera_updates(self):
-    #     """
-    #     카메라 설정을 시뮬레이션에 적용
-    #     """
-    #     # layout_ids = SceneRegistry.unpack_layout_ids(layout_ids)
-    #     # style_ids = SceneRegistry.unpack_style_ids(style_ids)
-    #     # self.layout_and_style_ids = [(l, s) for l in layout_ids for s in style_ids]
-    #     # # The code `get_layout_path` appears to be a function or method definition in Python.
-    #     # However, without the actual implementation details of the function, it is not possible to
-    #     # determine what specific task or functionality it is intended to perform. The function name
-    #     # suggests that it might be used to retrieve or generate a path related to layout
-    #     # information.
-    #     get_layout_path = SceneRegistry.get_layout_path # layout 가져올 수 있음
-
-    #     logging.debug("slef.layout_and_style_ids: {}".format(self.layout_and_style_ids))
-    #     layout_id, style_id = self.layout_and_style_ids[0]
-    #     layout_path = get_layout_path(layout_id=layout_id)
-    #     logging.debug("layout_path: {}".format(layout_path))
-
-    #     print('\n !!!!!!!! apply camera updates !!!!!!!! \n')
-
-    #     for camera in self._cam_configs:
-    #         if "agentview" in camera:
-    #             camera_id = self.sim.model.camera_name2id(camera)
-
-    #             # 현재 카메라 포즈
-    #             current_pos = self.sim.model.cam_pos[camera_id]
-    #             current_quat = self.sim.model.cam_quat[camera_id]
-
-    #             # 목표 카메라 포즈
-    #             target_pos = self._cam_configs[camera]["pos"]
-    #             target_quat = self._cam_configs[camera]["quat"]
-
-    #             # 보간 계수 (0.0 ~ 1.0)
-    #             interpolation_factor = 0.1
-
-    #             # 현재 포즈와 목표 포즈 사이를 선형 보간
-    #             new_pos = current_pos + interpolation_factor * (
-    #                 np.array(target_pos) - current_pos
-    #             )
-
-    #             # 회전 보간을 위한 Slerp 객체 생성
-    #             rot_slerp = Slerp(
-    #                 [0, 1], Rotation.from_quat([current_quat, target_quat])
-    #             )
-    #             new_quat = rot_slerp(interpolation_factor).as_quat()
-
-    #             # 시뮬레이션에 새로운 카메라 포즈 적용
-    #             self.sim.model.cam_pos[camera_id] = new_pos
-    #             self.sim.model.cam_quat[camera_id] = new_quat
+            logging.info(f"Camera: {camera_name}")
+            logging.info(f"Position: {camera_config['pos']}")
+            logging.info(f"Direction: {camera_direction}")
+            logging.info("---")
 
     def _post_action(self, action):
         """
@@ -1486,11 +1323,11 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         self._apply_camera_updates()
 
         # layout 정보 추출
-        self._extract_layout_info()
+        # self._extract_layout_info()
 
         # self.debug_camera_directions()  # 카메라 방향 확인
         # 위치 로깅
-        self.log_positions()
+        # self.log_positions()
 
         # Check if stove is turned on or not
         self.update_state()
