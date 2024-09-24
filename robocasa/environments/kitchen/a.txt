@@ -1,0 +1,829 @@
+네, 말씀하신 대로 벽면 정보를 활용하여 waypoint를 더 정확하게 설정할 수 있습니다. 그리고 island에 대해서는 별도의 처리가 필요할 것 같습니다. 다음과 같이 접근해 보겠습니다:
+
+벽면 정보 추출:
+먼저 room의 walls 정보를 추출하여 main, left, right 벽면의 위치와 크기를 파악합니다.
+그룹별 waypoint 생성:
+각 벽면(main, left, right)에 대해 waypoint를 생성합니다. 벽면의 크기와 위치를 고려하여 적절한 간격으로 waypoint를 배치합니다.
+Island 처리:
+Island의 경우, 'front_group' 또는 'island_group'으로 지정된 정보를 찾아 그 위치를 파악합니다. Island가 있다면 그 주변을 순회하는 waypoint를 추가로 생성합니다.
+
+다음은 이를 반영한 코드 수정 예시입니다:
+
+import numpy as np
+from scipy.spatial.transform import Rotation
+import yaml
+import logging
+from robocasa.models.scenes.scene_registry import get_layout_path
+
+class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
+    def __init__(self, ...):
+        # 기존 초기화 코드...
+        
+        self.layout_objects = {}
+        self.wall_info = {}
+        self.camera_waypoints = {}
+        self.current_wall = None
+        self.current_waypoint_index = 0
+        self.camera_movement_direction = 1  # 1 for forward, -1 for backward
+        
+        # 기존 초기화 코드...
+
+    def _extract_layout_info(self):
+        logging.debug(f"Extracting layout information for layout_id: {self.layout_id}")
+        layout_id, style_id = self.layout_and_style_ids[0]
+        layout_path = get_layout_path(layout_id=int(layout_id))
+        with open(layout_path, 'r') as file:
+            layout_data = yaml.safe_load(file)
+        
+        self.layout_objects = layout_data
+        self._extract_wall_info(layout_data.get('room', {}).get('walls', []))
+        self._extract_island_info(layout_data)
+        
+        self.setup_camera_waypoints()
+
+    def _extract_wall_info(self, walls):
+        self.wall_info = {
+            'main': None,
+            'left': None,
+            'right': None
+        }
+        for wall in walls:
+            if wall.get('wall_side') == 'left':
+                self.wall_info['left'] = wall
+            elif wall.get('wall_side') == 'right':
+                self.wall_info['right'] = wall
+            elif wall.get('type') == 'wall' and 'wall_side' not in wall:
+                self.wall_info['main'] = wall
+
+    def _extract_island_info(self, layout_data):
+        front_group = layout_data.get('front_group', {})
+        if front_group:
+            self.wall_info['island'] = {
+                'pos': front_group.get('group_pos', [0, 0, 0]),
+                'size': front_group.get('bottom_row', [{}])[0].get('size', [0, 0, 0])
+            }
+
+    def setup_camera_waypoints(self):
+        self.camera_waypoints = {}
+        for wall_type, wall_data in self.wall_info.items():
+            if wall_data:
+                waypoints = self.generate_wall_waypoints(wall_type, wall_data)
+                self.camera_waypoints[wall_type] = waypoints
+
+        # Set the initial wall
+        self.current_wall = next(iter(self.camera_waypoints.keys()))
+
+    def generate_wall_waypoints(self, wall_type, wall_data, num_points=20):
+        if wall_type == 'island':
+            return self.generate_island_waypoints(wall_data, num_points)
+        
+        pos = wall_data['pos']
+        size = wall_data['size']
+        
+        if wall_type == 'main':
+            start = [pos[0] - size[0]/2, pos[1] - 1, 1.4]
+            end = [pos[0] + size[0]/2, pos[1] - 1, 1.4]
+        elif wall_type == 'left':
+            start = [pos[0] - 1, pos[1] + size[1]/2, 1.4]
+            end = [pos[0] - 1, pos[1] - size[1]/2, 1.4]
+        elif wall_type == 'right':
+            start = [pos[0] + 1, pos[1] - size[1]/2, 1.4]
+            end = [pos[0] + 1, pos[1] + size[1]/2, 1.4]
+        
+        return [np.linspace(start[i], end[i], num_points) for i in range(3)]
+
+    def generate_island_waypoints(self, island_data, num_points=40):
+        pos = island_data['pos']
+        size = island_data['size']
+        
+        half_width = size[0] / 2
+        half_depth = size[1] / 2
+        
+        waypoints = []
+        for t in np.linspace(0, 1, num_points):
+            if t < 0.25:
+                x = pos[0] - half_width + 2*half_width*t*4
+                y = pos[1] - half_depth - 1
+            elif t < 0.5:
+                x = pos[0] + half_width + 1
+                y = pos[1] - half_depth + 2*half_depth*(t-0.25)*4
+            elif t < 0.75:
+                x = pos[0] + half_width - 2*half_width*(t-0.5)*4
+                y = pos[1] + half_depth + 1
+            else:
+                x = pos[0] - half_width - 1
+                y = pos[1] + half_depth - 2*half_depth*(t-0.75)*4
+            
+            waypoints.append([x, y, 1.4])
+        
+        return np.array(waypoints).T.tolist()
+
+    def _update_camera_poses(self):
+        for camera in self._cam_configs:
+            if "agentview" in camera:
+                current_waypoints = self.camera_waypoints[self.current_wall]
+                target_pos = [current_waypoints[0][self.current_waypoint_index],
+                              current_waypoints[1][self.current_waypoint_index],
+                              current_waypoints[2][self.current_waypoint_index]]
+                current_pos = self._cam_configs[camera]["pos"]
+
+                # Smooth interpolation
+                interpolation_factor = 0.05
+                new_pos = [current + (target - current) * interpolation_factor 
+                           for current, target in zip(current_pos, target_pos)]
+
+                self._cam_configs[camera]["pos"] = new_pos
+
+                # Move to next waypoint if close enough
+                if np.linalg.norm(np.array(new_pos) - np.array(target_pos)) < 0.01:
+                    self.current_waypoint_index += self.camera_movement_direction
+                    
+                    # Switch to next wall if reached the end of current wall
+                    if self.current_waypoint_index >= len(current_waypoints[0]) or self.current_waypoint_index < 0:
+                        self.switch_to_next_wall()
+
+        self._update_camera_orientation()
+
+    def _update_camera_orientation(self):
+        look_at_direction = self.get_look_at_direction(self.current_wall)
+
+        for camera in self._cam_configs:
+            if "agentview" in camera:
+                self._cam_configs[camera]["quat"] = self.get_camera_direction_quat(look_at_direction)
+
+    def get_look_at_direction(self, wall_type):
+        if wall_type == 'main':
+            return [-1, 0, 0]
+        elif wall_type == 'left':
+            return [1, 0, 0]
+        elif wall_type == 'right':
+            return [-1, 0, 0]
+        elif wall_type == 'island':
+            camera_pos = self._cam_configs["robot0_agentview_center"]["pos"]
+            island_center = self.wall_info['island']['pos']
+            direction = np.array(island_center) - np.array(camera_pos)
+            direction[2] = 0  # We don't want to look up or down
+            return direction / np.linalg.norm(direction)
+
+    def get_camera_direction_quat(self, look_at, up=[0, 0, 1]):
+        look_at = np.array(look_at) / np.linalg.norm(look_at)
+        up = np.array(up) / np.linalg.norm(up)
+        right = np.cross(look_at, up)
+        up = np.cross(right, look_at)
+        rot_matrix = np.array([right, up, -look_at]).T
+        return Rotation.from_matrix(rot_matrix).as_quat()
+
+    def switch_to_next_wall(self):
+        walls = list(self.camera_waypoints.keys())
+        current_index = walls.index(self.current_wall)
+        next_index = (current_index + 1) % len(walls)
+        self.current_wall = walls[next_index]
+        self.current_waypoint_index = 0 if self.camera_movement_direction == 1 else len(self.camera_waypoints[self.current_wall][0]) - 1
+
+    def _load_model(self):
+        # 기존 코드...
+        
+        self._extract_layout_info()
+        
+        # 기존 코드...
+
+    # Other methods remain the same...
+
+
+위치가 정확히 어디야?
+
+나는 yaml 예시로 하나로 해서 위치가 정확히 어떻게 구해지는지 설명해줘.
+
+코드는 중요한게 아니라 나를 이해시켜줘/
+네, 이해했습니다. 구체적인 예시를 통해 설명하겠습니다.
+다음과 같은 YAML 예시를 고려해봅시다:
+
+front_group:
+  group_origin: [0, 0]
+  group_pos: [1.975, -4.075]
+  group_z_rot: 3.1415
+  bottom_row:
+    - name: counter_1
+      type: counter
+      base_opening: [false, true]
+      size: [2.55, 0.65, 0.92]
+      pos: [0, 0, 0.46]
+
+이 YAML에서 island (여기서는 'front_group'으로 표현됨)의 위치를 파악하는 과정은 다음과 같습니다:
+
+group_pos: [1.975, -4.075]
+이것이 island의 기준점(원점) 위치입니다. 주방 전체 좌표계에서 island가 위치한 곳입니다.
+bottom_row의 첫 번째 항목 pos: [0, 0, 0.46]
+이는 group_pos를 기준으로 한 상대적 위치입니다. 여기서는 [0, 0, 0.46]이므로 group_pos와 수평으로 같은 위치에 있고, 수직으로만 0.46만큼 올라간 위치입니다.
+size: [2.55, 0.65, 0.92]
+이는 island의 크기입니다. 폭이 2.55, 깊이가 0.65, 높이가 0.92입니다.
+group_z_rot: 3.1415
+이는 island의 회전 각도입니다. 약 π 라디안, 즉 180도 회전했다는 의미입니다.
+
+따라서 island의 정확한 위치와 크기는 다음과 같이 해석됩니다:
+
+중심점: [1.975, -4.075, 0.46] (group_pos의 x, y와 bottom_row item의 z를 조합)
+크기: [2.55, 0.65, 0.92]
+회전: 180도
+
+이 정보를 바탕으로 island 주변의 카메라 waypoint를 생성할 수 있습니다. 예를 들어:
+
+왼쪽 끝: [1.975 - 1.275, -4.075, 1.4] (1.275는 2.55의 절반)
+오른쪽 끝: [1.975 + 1.275, -4.075, 1.4]
+앞쪽: [1.975, -4.075 - 0.325, 1.4] (0.325는 0.65의 절반)
+뒤쪽: [1.975, -4.075 + 0.325, 1.4]
+
+그리고 이 점들을 island의 회전(180도)에 맞춰 회전시키면 최종적인 waypoint가 됩니다.
+이렇게 YAML 파일의 정보를 해석하여 island의 정확한 위치, 크기, 방향을 파악하고, 이를 바탕으로 카메라 움직임을 계획할 수 있습니다.
+
+
+
+네, 물론입니다. 각 벽면과 island에 대한 웨이포인트 접근 방식을 상세히 설명해드리겠습니다.
+
+메인 벽 (Main Wall):
+
+위치: 주방의 뒷벽으로, 주로 x축을 따라 있습니다.
+접근 방식:
+
+벽의 왼쪽 끝에서 오른쪽 끝까지 일정한 간격으로 웨이포인트를 생성합니다.
+카메라는 벽으로부터 일정 거리(예: 1m) 떨어진 위치에서 벽을 향해 바라봅니다.
+
+
+웨이포인트 예시: [x, y-1, 1.4], 여기서 x는 벽의 길이에 따라 변화, y는 벽의 y좌표
+
+
+왼쪽 벽 (Left Wall):
+
+위치: 주방의 왼쪽 벽으로, 주로 y축을 따라 있습니다.
+접근 방식:
+
+벽의 뒤쪽에서 앞쪽까지 일정한 간격으로 웨이포인트를 생성합니다.
+카메라는 벽으로부터 일정 거리(예: 1m) 떨어진 위치에서 벽을 향해 바라봅니다.
+
+
+웨이포인트 예시: [x-1, y, 1.4], 여기서 y는 벽의 길이에 따라 변화, x는 벽의 x좌표
+
+
+오른쪽 벽 (Right Wall):
+
+위치: 주방의 오른쪽 벽으로, 주로 y축을 따라 있습니다.
+접근 방식:
+
+벽의 앞쪽에서 뒤쪽까지 일정한 간격으로 웨이포인트를 생성합니다.
+카메라는 벽으로부터 일정 거리(예: 1m) 떨어진 위치에서 벽을 향해 바라봅니다.
+
+
+웨이포인트 예시: [x+1, y, 1.4], 여기서 y는 벽의 길이에 따라 변화, x는 벽의 x좌표
+
+
+Island (있는 경우):
+
+위치: 주방 중앙이나 특정 위치에 있을 수 있습니다.
+접근 방식:
+
+Island 주변을 시계 방향이나 반시계 방향으로 순회하는 웨이포인트를 생성합니다.
+카메라는 Island로부터 일정 거리(예: 1m) 떨어진 위치에서 Island 중심을 향해 바라봅니다.
+
+
+웨이포인트 생성 단계:
+
+Island의 크기에 맞춰 로컬 좌표계에서 사각형 경로를 생성합니다.
+Island의 회전 각도를 적용하여 이 경로를 회전시킵니다.
+Island의 전역 위치로 이 경로를 이동시킵니다.
+
+
+
+
+
+웨이포인트 생성 시 주의사항:
+
+높이(z 좌표)는 대개 고정값(예: 1.4m)을 사용하여 사람의 눈높이와 비슷하게 설정합니다.
+각 벽이나 Island로부터의 거리는 주방 크기에 따라 조절할 수 있습니다.
+웨이포인트 간격은 주방 크기와 원하는 상세도에 따라 조절할 수 있습니다.
+
+카메라 이동 및 방향 설정:
+
+카메라는 현재 웨이포인트에서 다음 웨이포인트로 부드럽게 이동합니다.
+각 웨이포인트에서 카메라는 해당 벽면이나 Island를 향해 방향을 조정합니다.
+벽면의 경우 고정된 방향(예: 메인 벽을 향해 -x 방향)을 사용할 수 있습니다.
+Island의 경우 각 웨이포인트에서 Island 중심을 향하는 방향을 계산합니다.
+
+이러한 접근 방식을 통해 주방의 모든 주요 영역을 효과적으로 촬영하고, 사용자에게 전체적인 주방 레이아웃을 보여줄 수 있습니다.
+
+오른쪽 벽은? 없네?
+
+그리고 방향은 어디서부터 어떻게 돼?
+그리고 카메라의 방향은 어떻게 돼? 메인 벽은 그때 내가 준 -x축에다가 * 90도 뭐 해가지고 바라보게 해줬잖아? 기억나? 그럼 그상태에서 왼쪽 오른쪽 아일랜드 식탁은 어떻게 볼껀데?
+
+시나리오를 하나하나 줘. 
+
+    카메라 이동 미 방향 설정 방법.
+    각벽이나 아일랜드 식ㅏㄱ으로부터의 웨이포이트 거리 어떻게 조절하는지. 3.
+
+죄송합니다. 오른쪽 벽을 빠뜨린 것은 제 실수였습니다. 오른쪽 벽도 포함하여 각 벽면과 아일랜드에 대한 시나리오를 상세히 설명드리겠습니다.
+
+    카메라 이동 및 방향 설정 방법:
+
+메인 벽 (Back Wall):
+
+    이동: 왼쪽에서 오른쪽으로 이동 (x 증가)
+    방향: -x 축을 바라봄 (90도 회전)
+
+왼쪽 벽 (Left Wall):
+
+    이동: 뒤에서 앞으로 이동 (y 증가)
+    방향: +x 축을 바라봄 (메인 벽에서 270도 회전)
+
+오른쪽 벽 (Right Wall):
+
+    이동: 앞에서 뒤로 이동 (y 감소)
+    방향: -x 축을 바라봄 (메인 벽과 동일, 90도 회전)
+
+아일랜드/식탁:
+
+    이동: 시계 방향으로 아일랜드 주변을 순회
+    방향: 항상 아일랜드 중심을 향함 (위치에 따라 동적으로 계산)
+
+    웨이포인트 거리 조절:
+
+각 벽이나 아일랜드로부터의 거리는 주방 크기에 따라 조절합니다. 예를 들어:
+
+    작은 주방 (< 20m²): 벽으로부터 0.8m 거리
+    중간 주방 (20-40m²): 벽으로부터 1.2m 거리
+    큰 주방 (> 40m²): 벽으로부터 1.5m 거리
+
+아일랜드의 경우:
+
+    아일랜드 크기의 절반 + 0.5m (최소 1m, 최대 2m)
+
+    웨이포인트 생성 및 카메라 이동 시나리오:
+
+네, 좋은 지적입니다. YAML 파일의 'size' 정보를 활용하여 더 정확하고 적응적인 웨이포인트를 생성할 수 있습니다. 'size'의 의미와 이를 활용한 접근 방법을 설명드리겠습니다.
+YAML 파일에서 'size'의 의미:
+
+벽(Wall)의 경우: [길이, 높이, 두께]
+카운터, 아일랜드 등의 경우: [길이, 깊이, 높이]
+
+이 정보를 활용한 웨이포인트 생성 접근 방법:
+
+벽으로부터의 거리 계산:
+
+벽의 길이(size[0])를 기준으로 거리를 조절합니다.
+예: distance = max(wall_length * 0.2, 1.0)  # 최소 1m, 벽 길이의 20%
+이렇게 하면 큰 벽에서는 더 멀리, 작은 벽에서는 더 가까이 카메라를 위치시킬 수 있습니다.
+
+
+웨이포인트 개수 결정:
+
+벽의 길이에 비례하여 웨이포인트 개수를 결정합니다.
+예: num_points = max(int(wall_length / 0.5), 10)  # 0.5m 간격, 최소 10개
+
+
+카메라 높이 설정:
+
+벽의 높이(size[1])를 고려하여 카메라 높이를 설정합니다.
+예: camera_height = min(wall_height * 0.6, 1.8)  # 벽 높이의 60%, 최대 1.8m
+
+
+아일랜드/카운터의 경우:
+
+크기(size[0], size[1])를 고려하여 주변 경로를 생성합니다.
+거리 계산: distance = max(max(size[0], size[1]) * 0.3, 1.2)  # 최소 1.2m, 긴 변의 30%
+
+사람이 자연스럽게 데이터를 수집하는 것처럼 시뮬레이션을 구동하기 위한 상세한 접근 방법을 설명드리겠습니다.
+
+YAML 파일 정보 활용:
+a. room 정보:
+
+walls: 전체 주방 크기와 형태 파악
+floor: 바닥 크기로 전체 면적 확인
+
+b. 각 그룹 (main_group, front_group, left_group, right_group):
+
+group_pos: 그룹의 시작점
+group_z_rot: 그룹의 방향
+bottom_row, top_row: 실제 구조물 정보
+
+
+레이아웃별 접근 방법:
+a. 기본 레이아웃 (main_group만 있는 경우):
+
+main_group을 중심으로 웨이포인트 생성
+벽을 따라 이동하며 촬영
+
+b. L자형 레이아웃 (main_group + left_group 또는 right_group):
+
+두 그룹을 연결하는 경로 생성
+코너 부분에서 부드럽게 회전
+
+c. U자형 레이아웃 (main_group + left_group + right_group):
+
+세 그룹을 순차적으로 연결
+각 코너에서 부드럽게 회전
+
+d. 아일랜드가 있는 레이아웃 (front_group 포함):
+
+벽면 그룹들을 먼저 순회한 후 아일랜드로 이동
+아일랜드 주변을 원형으로 이동
+
+
+그룹이 없는 경우의 처리:
+
+누락된 그룹은 건너뛰고 다음 그룹으로 이동
+최소한 main_group은 있다고 가정
+
+
+카메라 이동 순서, 방향, 포지션:
+a. 이동 순서:
+
+main_group (항상 시작점)
+left_group (있는 경우)
+right_group (있는 경우)
+front_group (아일랜드, 있는 경우)
+
+b. 각 그룹 내 이동:
+
+시작점에서 끝점까지 일정한 속도로 이동
+그룹 간 이동 시 부드러운 곡선을 그리며 이동
+
+c. 카메라 방향:
+
+벽면 그룹: 항상 벽을 향하도록 설정
+아일랜드: 아일랜드 중심을 향하도록 동적으로 조정
+
+d. 카메라 포지션:
+
+높이: 사람의 눈높이를 고려 (약 1.6m)
+거리: 구조물 크기에 비례 (최소 1m, 최대 2m)
+
+
+구체적인 웨이포인트 생성 방법:
+a. 벽면 그룹:
+
+시작점: group_pos + (그룹 폭의 절반, -거리)
+끝점: group_pos + (그룹 길이 - 그룹 폭의 절반, -거리)
+두 점 사이를 n등분하여 웨이포인트 생성 (n은 그룹 길이에 비례)
+
+b. 아일랜드:
+
+중심점: group_pos + (길이/2, 폭/2)
+반경: max(길이, 폭) / 2 + 거리
+원을 따라 등간격으로 웨이포인트 생성
+
+
+자연스러운 이동을 위한 추가 고려사항:
+
+그룹 간 이동 시 베지어 곡선을 사용하여 부드러운 경로 생성
+속도 변화: 시작과 끝에서는 느리게, 중간에는 빠르게
+카메라 흔들림 효과: 작은 랜덤 노이즈 추가
+그룹 전환 시 약간의 정지 시간 추가 (사람이 방향을 바꾸는 것처럼)
+
+
+특별한 관심 영역 처리:
+
+주요 가전제품(냉장고, 오븐 등) 앞에서 잠시 정지
+복잡한 구조물(선반 등)에서는 더 천천히 이동
+
+
+
+이런 방식으로 접근하면, 다양한 주방 레이아웃에 대해 자연스럽고 효과적인 데이터 수집 시뮬레이션을 구현할 수 있을 것입니다. 각 단계에서 YAML 파일의 정보를 최대한 활용하되, 누락된 정보가 있을 경우 합리적인 기본값을 사용하여 대응할 수 있습니다.
+
+
+음 그런식으로 7번이나, 속도변화, 카메라 흔들림, 약간정지시간, 이런건 빼주고.. 전체적으로 다 좋은데 카메라 이동 시작점이 왼쪽벽이 있으면 왼쪽벽부터, 오른쪽 벽이 있다면 메인벽부터 즉 엑스 포즈가 작은 순서부터 카메라가 한바퀴를 훑으면 좋겠는데.. 더 어려울까? 이제 코드를 줘. kitchen.py에 맞게
+
+네, 이해했습니다. 카메라 이동 순서를 x 좌표가 작은 순서대로 정렬하여 한 바퀴 훑는 방식으로 수정하고, 불필요한 복잡성은 제거하겠습니다. 여기 Kitchen 클래스에 맞게 수정된 코드를 제공하겠습니다:
+
+import numpy as np
+from scipy.spatial.transform import Rotation
+import yaml
+import logging
+from robocasa.models.scenes.scene_registry import get_layout_path
+
+class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
+    def __init__(self, ...):
+        # 기존 초기화 코드...
+        
+        self.layout_objects = {}
+        self.wall_info = {}
+        self.camera_waypoints = []
+        self.current_waypoint_index = 0
+        
+        # 기존 초기화 코드...
+
+    def _extract_layout_info(self):
+        logging.debug(f"Extracting layout information for layout_id: {self.layout_id}")
+        layout_id, style_id = self.layout_and_style_ids[0]
+        layout_path = get_layout_path(layout_id=int(layout_id))
+        with open(layout_path, 'r') as file:
+            layout_data = yaml.safe_load(file)
+        
+        self.layout_objects = layout_data
+        self._extract_wall_info(layout_data)
+        self.setup_camera_waypoints()
+
+    def _extract_wall_info(self, layout_data):
+        self.wall_info = {}
+        groups = ['main_group', 'left_group', 'right_group', 'front_group']
+        for group in groups:
+            if group in layout_data:
+                group_data = layout_data[group]
+                group_pos = group_data.get('group_pos', [0, 0, 0])
+                group_rot = group_data.get('group_z_rot', 0)
+                bottom_row = group_data.get('bottom_row', [{}])[0]
+                size = bottom_row.get('size', [0, 0, 0])
+                self.wall_info[group] = {
+                    'pos': group_pos,
+                    'rot': group_rot,
+                    'size': size
+                }
+
+    def setup_camera_waypoints(self):
+        self.camera_waypoints = []
+        sorted_groups = sorted(self.wall_info.items(), key=lambda x: x[1]['pos'][0])
+        
+        for group_name, group_data in sorted_groups:
+            waypoints = self.generate_group_waypoints(group_name, group_data)
+            self.camera_waypoints.extend(waypoints)
+
+    def generate_group_waypoints(self, group_name, group_data):
+        pos = group_data['pos']
+        size = group_data['size']
+        rot = group_data['rot']
+
+        if group_name == 'front_group':
+            return self.generate_island_waypoints(pos, size, rot)
+        else:
+            return self.generate_wall_waypoints(pos, size, rot)
+
+    def generate_wall_waypoints(self, pos, size, rot, num_points=20):
+        length, depth, _ = size
+        distance = max(length * 0.2, 1.0)  # 벽으로부터의 거리
+        
+        local_waypoints = np.array([
+            [x, -distance, 1.6]  # 1.6m는 대략적인 눈높이
+            for x in np.linspace(-length/2, length/2, num_points)
+        ])
+        
+        rotation_matrix = Rotation.from_euler('z', rot).as_matrix()
+        rotated_waypoints = np.dot(local_waypoints, rotation_matrix.T)
+        global_waypoints = rotated_waypoints + pos
+        
+        return global_waypoints.tolist()
+
+    def generate_island_waypoints(self, pos, size, rot, num_points=40):
+        length, depth, _ = size
+        distance = max(max(length, depth) * 0.3, 1.2)
+        
+        theta = np.linspace(0, 2*np.pi, num_points)
+        local_waypoints = np.array([
+            [(length/2 + distance) * np.cos(t),
+             (depth/2 + distance) * np.sin(t),
+             1.6]  # 1.6m는 대략적인 눈높이
+            for t in theta
+        ])
+        
+        rotation_matrix = Rotation.from_euler('z', rot).as_matrix()
+        rotated_waypoints = np.dot(local_waypoints, rotation_matrix.T)
+        global_waypoints = rotated_waypoints + pos
+        
+        return global_waypoints.tolist()
+
+    def _update_camera_poses(self):
+        if not self.camera_waypoints:
+            return
+
+        target_pos = self.camera_waypoints[self.current_waypoint_index]
+        current_pos = self._cam_configs["robot0_agentview_center"]["pos"]
+
+        # Smooth interpolation
+        interpolation_factor = 0.05
+        new_pos = [current + (target - current) * interpolation_factor 
+                   for current, target in zip(current_pos, target_pos)]
+
+        self._cam_configs["robot0_agentview_center"]["pos"] = new_pos
+
+        # Move to next waypoint if close enough
+        if np.linalg.norm(np.array(new_pos) - np.array(target_pos)) < 0.01:
+            self.current_waypoint_index = (self.current_waypoint_index + 1) % len(self.camera_waypoints)
+
+        self._update_camera_orientation()
+
+    def _update_camera_orientation(self):
+        if not self.camera_waypoints:
+            return
+
+        current_pos = np.array(self._cam_configs["robot0_agentview_center"]["pos"])
+        next_pos = np.array(self.camera_waypoints[self.current_waypoint_index])
+        
+        direction = next_pos - current_pos
+        direction[2] = 0  # 수직 방향은 무시
+        if np.linalg.norm(direction) > 0:
+            direction = direction / np.linalg.norm(direction)
+        
+        up = np.array([0, 0, 1])
+        camera_right = np.cross(direction, up)
+        camera_up = np.cross(camera_right, direction)
+        
+        rotation_matrix = np.column_stack((camera_right, camera_up, -direction))
+        quat = Rotation.from_matrix(rotation_matrix).as_quat()
+        
+        self._cam_configs["robot0_agentview_center"]["quat"] = quat.tolist()
+
+    def _load_model(self):
+        # 기존 코드...
+        
+        self._extract_layout_info()
+        
+        # 기존 코드...
+
+    # Other methods remain the same...
+
+    이 수정된 Kitchen 클래스는 다음과 같은 주요 변경사항을 포함합니다:
+
+_extract_wall_info 메소드에서 모든 그룹(main, left, right, front)의 정보를 추출합니다.
+setup_camera_waypoints 메소드에서 그룹들을 x 좌표 순으로 정렬하여 카메라 이동 순서를 결정합니다.
+generate_group_waypoints 메소드에서 벽면과 아일랜드(front_group)에 대해 각각 다른 방식으로 웨이포인트를 생성합니다.
+_update_camera_poses 메소드에서는 현재 위치에서 다음 웨이포인트로 부드럽게 이동합니다.
+_update_camera_orientation 메소드에서는 카메라가 항상 이동 방향을 향하도록 방향을 조정합니다.
+
+이 접근 방식의 장점:
+
+x 좌표가 작은 순서대로 주방을 순회하여 자연스러운 움직임을 제공합니다.
+벽면과 아일랜드에 대해 각각 적절한 웨이포인트를 생성합니다.
+카메라가 부드럽게 이동하고 방향을 자연스럽게 조정합니다.
+레이아웃의 변화에 유연하게 대응할 수 있습니다.
+
+이 코드를 사용하면, 다양한 주방 레이아웃에 대해 효과적이고 자연스러운 카메라 움직임을 구현할 수 있을 것입니다. 필요에 따라 세부적인 조정이 가능하며, 특정 상황에 대한 예외 처리를 추가할 수 있습니다.
+카메라 바라보는 방향은 진짜 자연스럽게 아래로 보지만 조금씩 각도 틀어지게! 무슨말인지 알지
+
+
+네, 이해했습니다. 카메라가 자연스럽게 움직이면서 시선 방향이 조금씩 변화하는 것을 구현하고 싶으시군요. 이는 실제 사람이 주방을 둘러보는 듯한 더욱 자연스러운 움직임을 만들어낼 수 있습니다. 이를 반영하여 코드를 수정해보겠습니다.
+
+import numpy as np
+from scipy.spatial.transform import Rotation, Slerp
+import yaml
+import logging
+from robocasa.models.scenes.scene_registry import get_layout_path
+
+class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
+    def __init__(self, ...):
+        # 기존 초기화 코드...
+        
+        self.layout_objects = {}
+        self.wall_info = {}
+        self.camera_waypoints = []
+        self.camera_orientations = []
+        self.current_waypoint_index = 0
+        self.rng = np.random.default_rng()  # 랜덤 생성기
+        
+        # 기존 초기화 코드...
+
+    # _extract_layout_info 및 _extract_wall_info 메소드는 이전과 동일
+
+    def setup_camera_waypoints(self):
+        self.camera_waypoints = []
+        self.camera_orientations = []
+        sorted_groups = sorted(self.wall_info.items(), key=lambda x: x[1]['pos'][0])
+        
+        for group_name, group_data in sorted_groups:
+            waypoints, orientations = self.generate_group_waypoints(group_name, group_data)
+            self.camera_waypoints.extend(waypoints)
+            self.camera_orientations.extend(orientations)
+
+    def generate_group_waypoints(self, group_name, group_data):
+        pos = group_data['pos']
+        size = group_data['size']
+        rot = group_data['rot']
+        obj_type = group_data['type']
+
+        if group_name == 'front_group' or obj_type in ['counter', 'island']:
+            return self.generate_island_waypoints(pos, size, rot)
+        else:
+            return self.generate_wall_waypoints(pos, size, rot)
+
+    def generate_wall_waypoints(self, pos, size, rot, num_points=20):
+        length, depth, height = size
+        distance = max(length * 0.2, 1.0)  # 벽으로부터의 거리
+        camera_height = 1.6  # 기본 카메라 높이
+        
+        local_waypoints = np.array([
+            [x, -distance, camera_height]
+            for x in np.linspace(-length/2, length/2, num_points)
+        ])
+        
+        rotation_matrix = Rotation.from_euler('z', rot).as_matrix()
+        rotated_waypoints = np.dot(local_waypoints, rotation_matrix.T)
+        global_waypoints = rotated_waypoints + pos
+        
+        # 벽을 바라보는 기본 방향 계산
+        base_direction = np.array([0, 1, -0.1])  # 약간 아래를 바라봄
+        look_at_directions = []
+        for _ in range(num_points):
+            # 기본 방향에 작은 랜덤 변화 추가
+            random_offset = self.rng.normal(0, 0.05, 3)  # 표준편차 0.05의 정규분포
+            direction = base_direction + random_offset
+            direction = direction / np.linalg.norm(direction)  # 정규화
+            look_at_directions.append(direction)
+        
+        rotated_directions = np.dot(look_at_directions, rotation_matrix.T)
+        
+        return global_waypoints.tolist(), rotated_directions.tolist()
+
+    def generate_island_waypoints(self, pos, size, rot, num_points=40):
+        length, depth, height = size
+        distance = max(max(length, depth) * 0.3, 1.2)
+        camera_height = height + 0.5  # 아일랜드/식탁 높이보다 0.5m 높게
+        
+        theta = np.linspace(0, 2*np.pi, num_points)
+        local_waypoints = np.array([
+            [(length/2 + distance) * np.cos(t),
+             (depth/2 + distance) * np.sin(t),
+             camera_height]
+            for t in theta
+        ])
+        
+        rotation_matrix = Rotation.from_euler('z', rot).as_matrix()
+        rotated_waypoints = np.dot(local_waypoints, rotation_matrix.T)
+        global_waypoints = rotated_waypoints + pos
+        
+        # 아일랜드/식탁 중심을 바라보는 방향 계산
+        center = np.array([pos[0], pos[1], height/2])
+        look_at_directions = []
+        for waypoint in global_waypoints:
+            base_direction = center - waypoint
+            base_direction[2] -= 0.3  # 약간 아래를 바라보도록 조정
+            
+            # 기본 방향에 작은 랜덤 변화 추가
+            random_offset = self.rng.normal(0, 0.05, 3)  # 표준편차 0.05의 정규분포
+            direction = base_direction + random_offset
+            direction = direction / np.linalg.norm(direction)  # 정규화
+            look_at_directions.append(direction)
+        
+        return global_waypoints.tolist(), look_at_directions
+
+    def _update_camera_poses(self):
+        if not self.camera_waypoints:
+            return
+
+        target_pos = self.camera_waypoints[self.current_waypoint_index]
+        current_pos = self._cam_configs["robot0_agentview_center"]["pos"]
+
+        # Smooth interpolation
+        interpolation_factor = 0.05
+        new_pos = [current + (target - current) * interpolation_factor 
+                   for current, target in zip(current_pos, target_pos)]
+
+        self._cam_configs["robot0_agentview_center"]["pos"] = new_pos
+
+        # Move to next waypoint if close enough
+        if np.linalg.norm(np.array(new_pos) - np.array(target_pos)) < 0.01:
+            self.current_waypoint_index = (self.current_waypoint_index + 1) % len(self.camera_waypoints)
+
+        self._update_camera_orientation()
+
+    def _update_camera_orientation(self):
+        if not self.camera_orientations:
+            return
+
+        current_direction = self.camera_orientations[self.current_waypoint_index]
+        next_direction = self.camera_orientations[(self.current_waypoint_index + 1) % len(self.camera_orientations)]
+        
+        # Slerp를 사용하여 현재 방향과 다음 방향 사이를 부드럽게 보간
+        slerp = Slerp([0, 1], Rotation.from_rotvec([current_direction, next_direction]))
+        interpolated_direction = slerp(0.5).as_rotvec()
+        
+        up = np.array([0, 0, 1])
+        camera_right = np.cross(interpolated_direction, up)
+        camera_up = np.cross(camera_right, interpolated_direction)
+        
+        rotation_matrix = np.column_stack((camera_right, camera_up, -interpolated_direction))
+        quat = Rotation.from_matrix(rotation_matrix).as_quat()
+        
+        self._cam_configs["robot0_agentview_center"]["quat"] = quat.tolist()
+
+    # Other methods remain the same...
+
+    이 수정된 코드의 주요 변경 사항은 다음과 같습니다:
+
+rng (랜덤 넘버 생성기)를 초기화하여 랜덤성을 추가합니다.
+generate_wall_waypoints와 generate_island_waypoints 메소드에서:
+
+기본 방향에 작은 랜덤 오프셋을 추가하여 각 웨이포인트마다 약간씩 다른 방향을 생성합니다.
+이 랜덤 오프셋은 평균 0, 표준편차 0.05의 정규분포를 따릅니다. 이 값은 필요에 따라 조정할 수 있습니다.
+
+
+_update_camera_orientation 메소드에서:
+
+현재 방향과 다음 방향 사이를 Slerp(Spherical Linear Interpolation)를 사용하여 부드럽게 보간합니다.
+이로 인해 카메라 방향이 연속적이고 자연스럽게 변화합니다.
+
+
+
+이러한 변경사항들로 인한 효과:
+
+카메라가 각 지점을 바라볼 때 약간씩 다른 각도로 바라봅니다.
+카메라 이동 중 방향 전환이 부드럽게 이루어집니다.
+전체적으로 더 자연스럽고 사람의 시선 움직임과 유사한 효과를 얻을 수 있습니다.
+
+이 접근 방식은 주방을 둘러보는 실제 사람의 시선 움직임을 더 잘 모방합니다. 랜덤성의 정도나 보간 방식은 필요에 따라 더 미세하게 조정할 수 있습니다. 또한, 특정 관심 영역(예: 주요 가전제품)에 대해서는 추가적인 로직을 도입하여 더 자세히 관찰하도록 할 수도 있습니다.
+
