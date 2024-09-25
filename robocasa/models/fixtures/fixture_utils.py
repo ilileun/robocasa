@@ -102,5 +102,10 @@ def fixture_is_type(fixture, fixture_type):
         return isinstance(fixture, Counter) and "island" in fixture.name
     elif fixture_type == FixtureType.COUNTER_NON_CORNER:
         return isinstance(fixture, Counter) and "corner" not in fixture.name
+    elif fixture_type == FixtureType.FRIDGE:
+        return isinstance(fixture, Fridge)
+    elif fixture_type == FixtureType.SINK:
+        return isinstance(fixture, Sink)
+
     else:
         raise ValueError

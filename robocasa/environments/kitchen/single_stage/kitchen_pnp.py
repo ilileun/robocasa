@@ -1,5 +1,10 @@
 from robocasa.environments.kitchen.kitchen import *
 
+from loguru import logger
+
+# 로거 설정
+logger.add("debug.log", rotation="500 MB")
+
 
 class PnP(Kitchen):
     """
@@ -12,6 +17,9 @@ class PnP(Kitchen):
     """
 
     def __init__(self, obj_groups="all", exclude_obj_groups=None, *args, **kwargs):
+        logger.info(
+            f"Initializing PnP with obj_groups={obj_groups}, exclude_obj_groups={exclude_obj_groups}"
+        )
         self.obj_groups = obj_groups
         self.exclude_obj_groups = exclude_obj_groups
 
@@ -34,7 +42,9 @@ class PnPCounterToCab(PnP):
     def __init__(
         self, cab_id=FixtureType.CABINET_TOP, obj_groups="all", *args, **kwargs
     ):
-
+        logger.info(
+            f"Initializing PnPCounterToCab with cab_id={cab_id}, obj_groups={obj_groups}"
+        )
         self.cab_id = cab_id
         super().__init__(obj_groups=obj_groups, *args, **kwargs)
 
@@ -44,11 +54,52 @@ class PnPCounterToCab(PnP):
         The cabinet to place object in and the counter to initialize it on
         """
         super()._setup_kitchen_references()
+        try:
+            self.island = self.register_fixture_ref(
+                "island",
+                dict(id=FixtureType.ISLAND),
+            )
+        except AssertionError:
+            print(
+                "Warning: Island not found in the current layout. Using an alternative fixture."
+            )
+            # 대체 fixture 사용 (예: 첫 번째 사용 가능한 counter)
+            self.island = self.register_fixture_ref(
+                "island",
+                dict(id=FixtureType.COUNTER),  # island 대신 counter로 대체!!
+            )
+
         self.cab = self.register_fixture_ref("cab", dict(id=self.cab_id))
-        self.counter = self.register_fixture_ref(
-            "counter", dict(id=FixtureType.COUNTER, ref=self.cab)
+        # self.counter = self.register_fixture_ref(
+        #     "counter", dict(id=FixtureType.COUNTER, ref=self.cab)
+        # )
+
+        # self.init_robot_base_pos = self.cab
+
+        # ==============
+
+        self.microwave = self.register_fixture_ref(
+            "microwave",
+            dict(id=FixtureType.MICROWAVE),
         )
-        self.init_robot_base_pos = self.cab
+        self.counter = self.register_fixture_ref(
+            "counter",
+            dict(id=FixtureType.COUNTER, ref=self.microwave),
+        )
+        self.distr_counter = self.register_fixture_ref(
+            "distr_counter",
+            dict(id=FixtureType.COUNTER, ref=self.microwave),
+        )
+        self.fridge = self.register_fixture_ref(
+            "fridge",
+            dict(id=FixtureType.FRIDGE),
+        )
+
+        self.init_robot_base_pos = self.island
+
+        logger.debug(
+            f"Kitchen references set up: cab={self.cab}, counter={self.counter}"
+        )
 
     def get_ep_meta(self):
         """
@@ -60,6 +111,10 @@ class PnPCounterToCab(PnP):
         ep_meta[
             "lang"
         ] = f"pick the {obj_lang} from the counter and place it in the cabinet"
+
+        logger.info(f"obj_lang: {obj_lang}")
+        logger.info(f'episode for em_meta["lang"]: {ep_meta["lang"]}')
+        # logger.info(f"Episode metadata: {ep_meta}")
         return ep_meta
 
     def _reset_internal(self):
@@ -67,7 +122,11 @@ class PnPCounterToCab(PnP):
         Resets simulation internal configurations.
         """
         super()._reset_internal()
-        self.cab.set_door_state(min=0.90, max=1.0, env=self, rng=self.rng)
+        # self.cab.set_door_state(min=0.90, max=1.0, env=self, rng=self.rng)
+
+        ##############################
+
+        # self.microwave.set_door_state(min=0.90, max=1.0, env=self, rng=self.rng)
 
     def _get_obj_cfgs(self):
         """
@@ -124,6 +183,61 @@ class PnPCounterToCab(PnP):
             )
         )
 
+        cfgs.append(
+            dict(
+                name="tomato",  # 여기 이름은 자유롭게 가능
+                obj_groups="tomato",  # 오브젝트 이름 !
+                # placement=dict(
+                #     fixture=self.counter,
+                #     sample_region_kwargs=dict(
+                #         ref=self.cab,
+                #     ),
+                #     size=(0.35, 0.2),
+                #     pos=("ref", -1.0),
+                # ),
+                placement=dict(
+                    fixture=self.island,
+                    size=(0.0, 0.0),  # 이동할 수 있는 범위 설정
+                    pos=(0.0, 0.0),
+                    offset=(0.0, 0.0),
+                ),
+                ensure_object_boundary_in_range=True,
+            )
+        )
+
+        """
+        Get the object configurations for the counter to cabinet pick and place task.
+        Spawns 30 objects randomly on the island.
+        """
+        # Island의 크기를 가져옵니다. 이 부분은 실제 환경에 맞게 조정해야 할 수 있습니다.
+        island_size = self.island.size
+        spawn_object_num = 10
+
+        # 30개의 object를 생성합니다.
+        for i in range(spawn_object_num):
+            cfgs.append(
+                dict(
+                    name=f"object_{i}",  # 각 객체에 고유한 이름을 부여합니다.
+                    obj_groups="all",  # 모든 객체 그룹에서 선택합니다. 필요에 따라 변경 가능합니다.
+                    graspable=True,
+                    placement=dict(
+                        fixture=self.island,
+                        size=(
+                            island_size[0] * 0.8,
+                            island_size[1] * 0.8,
+                        ),  # island 크기의 80%를 사용 영역으로 설정
+                        pos=(0.0, 0.0),  # island의 중심을 기준으로 합니다.
+                        offset=(0.0, 0.0),
+                    ),
+                    ensure_object_boundary_in_range=True,
+                )
+            )
+
+        # spawn 되는 물체의 상세 정보..
+        # logger.info(f"Distractor in cabinet configuration: {cfgs}")
+        # spawn 되는 물체의 개수..
+        logger.info(f"Total number of object configurations: {len(cfgs)}")
+
         return cfgs
 
     def _check_success(self):
@@ -136,6 +250,15 @@ class PnPCounterToCab(PnP):
         """
         obj_inside_cab = OU.obj_inside_of(self, "obj", self.cab)
         gripper_obj_far = OU.gripper_obj_far(self)
+
+        ## check if the object is inside the cabinet!
+        success = obj_inside_cab and gripper_obj_far
+        # logger.info(f"Task success check: obj_inside_cab={obj_inside_cab}, gripper_obj_far={gripper_obj_far}, success={success}")
+        if success:
+            logger.info(
+                f"Task success check: obj_inside_cab={obj_inside_cab}, gripper_obj_far={gripper_obj_far}, success={success}"
+            )
+
         return obj_inside_cab and gripper_obj_far
 
 
@@ -154,6 +277,9 @@ class PnPCabToCounter(PnP):
     ):
         self.cab_id = cab_id
         super().__init__(obj_groups=obj_groups, *args, **kwargs)
+        logger.info(
+            f"Initializing PnPCabToCounter with cab_id={cab_id}, obj_groups={obj_groups}"
+        )
 
     def _setup_kitchen_references(self):
         """
@@ -188,6 +314,7 @@ class PnPCabToCounter(PnP):
         Resets simulation internal configurations.
         """
         super()._reset_internal()
+        # 여기가 서랍장 여는 부분으로..
         self.cab.set_door_state(min=0.90, max=1.0, env=self, rng=self.rng)
 
     def _get_obj_cfgs(self):

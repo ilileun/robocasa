@@ -38,17 +38,21 @@ from robocasa.utils.texture_swap import (
 )
 
 
-# jieun add
+# jieun add========================================
 
 import logging
 import yaml
 from robocasa.models.scenes.scene_registry import get_layout_path
+from scipy.spatial.transform import Rotation as R
+
 
 # logging.basicConfig(level=logging.DEBUG)
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+
+# =================================================
 REGISTERED_KITCHEN_ENVS = {}
 
 
@@ -240,16 +244,30 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
     ):
 
         # JIEUN ADD ========================================
+
+        ####### yaml 파일 읽어오기
+        self.moving_camera = False
+        self.layout_objects = {}
+        self.wall_info = {}
+        self.layout_type = None
+        self.current_waypoint_index = 0
+
+        self.waypoints = []
+        self.layout_id = 0
+
+        # layout 정보 추출
+        self._extract_layout_info()
+
+        # layout 타입 결정
+        self._determine_layout_type()
+
         # 새로운 카메라 설정 초기화
         self.initial_pos = [0, -2, 2]
         # self.initial_pos = [-1,0,0]
         self.waypoints = self.generate_waypoints(0, 4, 0.05)
-        self.current_waypoint_index = 0
 
-        ####### yaml 파일 읽어오기
-        self.layout_objects = {}
-        self.wall_info = {}
-        self.layout_type = None
+        self.original_camera_rotation = None
+
         # =================================================
 
         self.init_robot_base_pos = init_robot_base_pos
@@ -1238,41 +1256,6 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         return sensors, names
 
     # 기존 one_wall 꺼.. ==============================
-    def generate_waypoints(self, start, end, step):
-        waypoints = []
-        current = start
-        while current <= end:
-            waypoints.append([current, -2, 2])
-            # waypoints.append([-2, current, 2])
-            current += step
-        return waypoints
-
-    def _update_camera_poses(self):
-        for camera in self._cam_configs:
-            if "agentview" in camera:
-                target_pos = self.waypoints[self.current_waypoint_index]
-                current_pos = self._cam_configs[camera]["pos"]
-
-                # 부드러운 이동을 위한 보간
-                interpolation_factor = 0.05
-                new_pos = [
-                    current + (target - current) * interpolation_factor
-                    for current, target in zip(current_pos, target_pos)
-                ]
-
-                self._cam_configs[camera]["pos"] = new_pos
-
-                # 목표 지점에 충분히 가까워지면 다음 waypoint로 이동
-                if np.linalg.norm(np.array(new_pos) - np.array(target_pos)) < 0.1:
-                    self.current_waypoint_index = (
-                        self.current_waypoint_index + 1
-                    ) % len(self.waypoints)
-
-    def _apply_camera_updates(self):
-        for camera in self._cam_configs:
-            if "agentview" in camera:
-                camera_id = self.sim.model.camera_name2id(camera)
-                self.sim.model.cam_pos[camera_id] = self._cam_configs[camera]["pos"]
 
     def log_positions(self):
         for camera in self._cam_configs:
@@ -1305,9 +1288,9 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         self.layout_objects = layout_data
         self._extract_wall_info(layout_data.get("room", {}).get("walls", []))
 
-        logging.info(
-            f"Layout objects: {self.layout_objects}, \n Wall info: {self.wall_info}"
-        )
+        # logging.info(
+        #     f"Layout objects: {self.layout_objects}, \n Wall info: {self.wall_info}"
+        # )
         # logging.info(f"Wall info: {self.wall_info}")
 
     def _extract_wall_info(self, walls):
@@ -1320,15 +1303,17 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             elif wall.get("type") == "wall" and "wall_side" not in wall:
                 self.wall_info["main"] = wall
 
+        logging.info(f"Wall info: {self.wall_info}")
+
     def _determine_layout_type(self):
         main_group = self.layout_objects.get("main_group", {})
         left_group = self.layout_objects.get("left_group", {})
         right_group = self.layout_objects.get("right_group", {})
         island_group = self.layout_objects.get("island_group", {})
 
-        logging.debug(
-            f"main_group: {main_group}, left_group: {left_group}, right_group: {right_group}, island_group: {island_group}"
-        )
+        # logging.debug(
+        #     f"main_group: {main_group}, left_group: {left_group}, right_group: {right_group}, island_group: {island_group}"
+        # )
 
         self.layout_features = set()
         if main_group:
@@ -1363,8 +1348,147 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             " ".join(layout_description) if layout_description else "Unknown"
         )
 
-        logging.info(f"Determined layout type: {self.layout_type}")
+        # logging.info(f"Determined layout type: {self.layout_type}")
         logging.info(f"Layout features: {self.layout_features}")
+
+    def generate_all_waypoints(self):
+        self.waypoints = []
+        self.wall_sequence = []
+
+        wall_types = ["main", "left", "right"] if self.layout_features else ["default"]
+
+        for wall_type in wall_types:
+            if wall_type in self.layout_features or wall_type == "default":
+                new_waypoints = self.generate_wall_waypoints(wall_type)
+                self.waypoints.extend(new_waypoints)
+                self.wall_sequence.extend([wall_type] * len(new_waypoints))
+
+        logging.info(f"Generated waypoints for walls: {set(self.wall_sequence)}")
+        logging.info(f"Total waypoints: {len(self.waypoints)}")
+
+    def generate_wall_waypoints(self, wall_type):
+        # num_points = 20
+        num_points = 10
+        if wall_type == "main":
+            return [[x, -2, 2] for x in np.linspace(0, 4, num_points)]
+        elif wall_type == "left":
+            return [[2.5, y, 2] for y in np.linspace(0, -4, num_points)]
+        elif wall_type == "right":
+            return [[2.5, y, 2] for y in np.linspace(0, -4, num_points)]
+        else:  # default
+            return [[x, -2, 2] for x in np.linspace(0, 4, num_points)]
+
+    def generate_waypoints(self, start, end, step):
+        if self.layout_features == {"main"}:
+            waypoints = []
+            current = start
+            while current <= end:
+                waypoints.append([current, -2, 2])
+                current += step
+            return waypoints
+        elif self.layout_features == {"right"}:
+            end = -end
+            waypoints = []
+            current = start
+            while current >= end:
+                waypoints.append([2, current, 2])
+                current -= step
+            return waypoints
+        elif self.layout_features == {"left"}:
+            end = -end
+            waypoints = []
+            current = start
+            while current >= end:
+                waypoints.append([2, current, 2])
+                current -= step
+            return waypoints
+
+    def _update_camera_poses(self):
+        if not self.waypoints or not self.wall_sequence:
+            logging.warning(
+                "No waypoints or wall sequence available. Skipping camera update."
+            )
+            return
+
+        for camera in self._cam_configs:
+            if "agentview" in camera:
+                if self.current_waypoint_index >= len(self.waypoints):
+                    logging.warning(
+                        f"Current waypoint index {self.current_waypoint_index} out of range. Resetting to 0."
+                    )
+                    self.current_waypoint_index = 0
+
+                current_pos = np.array(self._cam_configs[camera]["pos"])
+                target_pos = np.array(self.waypoints[self.current_waypoint_index])
+
+                # Smooth interpolation for position
+                # interpolation_factor = 0.05
+                interpolation_factor = 0.2
+                new_pos = (
+                    current_pos + (target_pos - current_pos) * interpolation_factor
+                )
+
+                self._cam_configs[camera]["pos"] = new_pos.tolist()
+
+                # Update camera rotation based on current wall
+                current_wall = self.wall_sequence[self.current_waypoint_index]
+                self._update_camera_rotation(camera, current_wall)
+
+                # Move to next waypoint if close enough
+                if np.linalg.norm(new_pos - target_pos) < 0.1:
+                    self.current_waypoint_index = (
+                        self.current_waypoint_index + 1
+                    ) % len(self.waypoints)
+                    if self.current_waypoint_index == 0:
+                        logging.info("Camera completed full cycle of waypoints.")
+
+                logging.debug(f"Camera '{camera}' moved to {new_pos}")
+
+    def _update_camera_rotation(self, camera, wall_type):
+        # 원래 카메라 방향 저장 (아직 저장되지 않은 경우에만)
+        if self.original_camera_rotation is None:
+            self.original_camera_rotation = R.from_quat(
+                self._cam_configs[camera]["quat"]
+            )
+
+        if wall_type == "main" or wall_type == "default":
+            # 메인 벽일 때 원래 방향으로 복원
+            rotation = self.original_camera_rotation
+        elif wall_type == "left":
+            # 원래 방향에서 x축으로 -90도 회전
+            rotation = self.original_camera_rotation
+
+            rotation = self.original_camera_rotation * R.from_euler(
+                "x", -90, degrees=True
+            )
+        elif wall_type == "right":
+            # 원래 방향에서 x축으로 90도 회전
+            rotation = self.original_camera_rotation
+
+            rotation = self.original_camera_rotation * R.from_euler(
+                "x", 90, degrees=True
+            )
+        else:
+            logging.warning(
+                f"Unknown wall type: {wall_type}. Keeping original rotation."
+            )
+            rotation = self.original_camera_rotation
+
+        # 회전을 쿼터니온으로 변환하고 카메라 설정 업데이트
+        quat = rotation.as_quat()
+        self._cam_configs[camera]["quat"] = quat.tolist()
+
+    def _apply_camera_updates(self):
+        for camera in self._cam_configs:
+            if "agentview" in camera:
+                camera_id = self.sim.model.camera_name2id(camera)
+                new_pos = self._cam_configs[camera]["pos"]
+                new_quat = self._cam_configs[camera]["quat"]
+                self.sim.model.cam_pos[camera_id] = new_pos
+                self.sim.model.cam_quat[camera_id] = new_quat
+                logging.debug(
+                    f"Updated camera '{camera}' position to {new_pos} and rotation to {new_quat}"
+                )
 
     # 기존 one_wall 꺼.. ==============================
 
@@ -1395,25 +1519,27 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         """
         reward, done, info = super()._post_action(action)
 
-        # 카메라 포즈를 실시간으로 업데이트
-        self._update_camera_poses()
+        if self.moving_camera is True:
+            # layout 정보 추출
+            self._extract_layout_info()
 
-        # 카메라 설정을 시뮬레이션에 적용
-        self._apply_camera_updates()
+            # layout 타입 결정
+            self._determine_layout_type()
 
-        # layout 정보 추출
-        self._extract_layout_info()
+            self.generate_all_waypoints()
 
-        # layout 타입 결정
-        self._determine_layout_type()
+            # 카메라 포즈를 실시간으로 업데이트
+            self._update_camera_poses()
 
-        #  카메라 방향 확인
-        # self.debug_camera_directions()
+            # 카메라 설정을 시뮬레이션에 적용
+            self._apply_camera_updates()
 
-        # 위치 로깅
-        # self.log_positions()
+            #  카메라 방향 확인
+            # self.debug_camera_directions()
 
-        # Check if stove is turned on or not
+            # 위치 로깅
+            # self.log_positions()
+
         self.update_state()
 
         return reward, done, info
@@ -1459,16 +1585,29 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         # Run superclass method first
         super().visualize(vis_settings=vis_settings)
 
-        visual_geom_names = []
+        robot_model = self.robots[0].robot_model
+        visual_geom_names = robot_model.visual_geoms
 
+        # 로봇자체를 semi-transparent하게 만듦
         for robot in self.robots:
             robot_model = robot.robot_model
             visual_geom_names += robot_model.visual_geoms
 
+            # 추가적으로 로봇 gripper와 base를 semi-transparent하게 만듦!!
+            gripper_model = robot.gripper
+            for arm in gripper_model:
+                visual_geom_names += gripper_model[arm].visual_geoms
+
+            # 로봇 base를 semi-transparent하게 만듦
+            visual_geom_names += robot_model.base.visual_geoms
+
+        # 여기는 로봇의 visua_geom_names들 안에 있는 것을 semi-transparent하게 만드는 부분
         for name in visual_geom_names:
             rgba = self.sim.model.geom_rgba[self.sim.model.geom_name2id(name)]
             if self.translucent_robot:
-                rgba[-1] = 0.20
+                rgba[-1] = 0.00
+                # 아예 안보이게 하려면 아래 코드
+
             else:
                 rgba[-1] = 1.0
 

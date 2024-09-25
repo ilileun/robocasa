@@ -68,7 +68,10 @@ camera_quat = get_camera_direction_quat(main_wall_direction)
 
 # y축을 중심으로 90도 회전을 추가
 y_rotation = Rotation.from_euler("y", 90, degrees=True)
-camera_quat_rotated = (y_rotation * Rotation.from_quat(camera_quat)).as_quat()
+x_rotation = Rotation.from_euler("x", 20, degrees=True)
+camera_quat_rotated = (
+    y_rotation * x_rotation * Rotation.from_quat(camera_quat)
+).as_quat()
 
 CAM_CONFIGS = dict(
     robot0_agentview_center=dict(
