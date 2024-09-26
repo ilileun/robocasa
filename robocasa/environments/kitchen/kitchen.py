@@ -259,7 +259,13 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         self.save_image_flag = False
 
         ####### Read yaml file
+
+        # True will be moving camera, False will be fixed camera
         self.moving_camera = False
+
+        # True will save rgb-depth image using keyboard press "5"
+        self.rgb_d_image = False
+
         self.layout_objects = {}
         self.wall_info = {}
         self.layout_type = None
@@ -1664,6 +1670,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                 - (dict) information about the current state of the environment
         """
         reward, done, info = super()._post_action(action)
+        self.update_state()
 
         if self.moving_camera is True:
             # Extract layout information
@@ -1686,8 +1693,8 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             # Log positions
             # self.log_positions()
 
-        self.update_state()
-        self.save_images_and_pose()
+        if self.rgb_d_image is True:
+            self.save_images_and_pose()
 
         return reward, done, info
 
