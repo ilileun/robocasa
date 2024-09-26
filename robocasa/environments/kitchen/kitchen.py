@@ -246,19 +246,19 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         randomize_cameras=False,
     ):
 
-        # JIEUN ADD ========================================
+        # ADDITIONAL SETUP ========================================
 
-        # 이미지 저장을 위한 경로 설정
+        # Set paths for saving images
         self.base_path = "/home/libra/git/cotap_ws/dynamic_scene_graph/data_gen/robocasa/robocasa/rgb_d_gen"
         self.rgb_path = os.path.join(self.base_path, "rgb")
         self.depth_path = os.path.join(self.base_path, "depth")
         os.makedirs(self.rgb_path, exist_ok=True)
         os.makedirs(self.depth_path, exist_ok=True)
 
-        # 키보드 입력 감지를 위한 변수
+        # Variable for detecting keyboard input
         self.save_image_flag = False
 
-        ####### yaml 파일 읽어오기
+        ####### Read yaml file
         self.moving_camera = False
         self.layout_objects = {}
         self.wall_info = {}
@@ -268,13 +268,13 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         self.waypoints = []
         self.layout_id = 0
 
-        # layout 정보 추출
+        # Extract layout information
         self._extract_layout_info()
 
-        # layout 타입 결정
+        # Determine layout type
         self._determine_layout_type()
 
-        # 새로운 카메라 설정 초기화
+        # Initialize new camera settings
         self.initial_pos = [0, -2, 2]
         # self.initial_pos = [-1,0,0]
         self.waypoints = self.generate_waypoints(0, 4, 0.05)
@@ -443,9 +443,9 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         for obj_pos, obj_quat, obj in fxtr_placements.values():
             assert isinstance(obj, Fixture)
             obj.set_pos(obj_pos)
-            # 여기서 토스트, paper_towl등 오브젝트의 방향을 알수 있음 (accessories.py)
+            # Here, we can determine the orientation of objects like the toaster, paper towel, etc. (accessories.py)
 
-            # hacky code to set orientation
+            # Hacky code to set orientation
             obj.set_euler(T.mat2euler(T.quat2mat(T.convert_quat(obj_quat, "xyzw"))))
 
         # setup internal references related to fixtures
@@ -1279,7 +1279,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
 
         return sensors, names
 
-    # 기존 one_wall 꺼.. ==============================
+    # +++ custom start  ==============================
 
     def set_save_image_flag(self):
         self.save_image_flag = True
@@ -1288,7 +1288,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         if self.save_image_flag:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
 
-            # 환경 셋업 정보 불러오는 경우
+            # env setup
             env = self
             # obs_dict = env.reset()
 
@@ -1300,7 +1300,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             )
             # image = obs_dict["{}_image".format(camera_name)][::-1]
 
-            # RGB 이미지 저장
+            # RGB
 
             image = self.sim.render(
                 camera_name="robot0_eye_in_hand",
@@ -1312,7 +1312,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
 
             plt.imsave(rgb_file, image)
 
-            # Depth 맵 저장
+            # save Depth
             depth_map = None
 
             try:
@@ -1324,71 +1324,32 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                 )
                 depth_map = depth_map_check[1]
 
-                # unnormalized depth map
-                # 깊이 맵 언노멀라이즈 (MuJoCo의 경우)
-                # extent = self.sim.model.stat.extent
-                # near = self.sim.model.vis.map.znear * extent
-                # far = self.sim.model.vis.map.zfar * extent
-
-                # # 깊이 값을 실제 거리(미터)로 변환
-                # depth_map = near / (1 - depth_map * (1 - near / far))
-                # logging.info(f'exent: {extent}, near: {near}, far: {far}')
-
-                # unnormalized depth map
-                # depth_map = obs_dict["{}_depth".format(camera_name)][::-1]
-                # depth_map = CU.get_real_depth_map(sim=env.sim, depth_map=depth_map)
-
-                # depth_map_check는 (RGB 이미지, 깊이 맵)의 튜플이므로, 두 번째 요소인 깊이 맵만 사용
-                # depth_map = CU.get_real_depth_map(sim=env.sim, depth_map=depth_map_check[1])
                 depth_map = depth_map[::-1]
 
-                # (Pdb) depth_map.shape
-                # (512, 512, 1)
-
-                # breakpoint()
-                # =========================
-
-                # if isinstance(depth_map, tuple) and len(depth_map) == 2:
-                #     depth_map = depth_map[0]
-
-                # depth_map = np.array(depth_map)
-
-                # if depth_map.ndim > 2:
-                #     depth_map = depth_map[:, :, 0]
-
-                # logging.info(f"Depth map shape: {depth_map.shape}, dtype: {depth_map.dtype}")
-
-                # 깊이 맵의 최소값과 최대값 로깅
-                # logging.info(f"Depth map min: {np.min(depth_map)}, max: {np.max(depth_map)}")
-                # logging.info(f"Depth map:{depth_map}")
-
-                # depth_map_normalized = (depth_map - np.min(depth_map)) / (np.max(depth_map) - np.min(depth_map))
-                # plt.imsave(depth_file, depth_map_normalized, cmap='gray')
-                # plt.imsave(depth_file, depth_map, cmap='gray')
                 plt.imsave(depth_file, depth_map)
 
             except Exception as e:
                 logging.error(f"Error saving depth map: {e}")
 
-            ### 카메라 포즈를 월드 좌표계로 변환
+            ### Convert camera pose to world coordinates
 
-            # 엔드 이펙터(right_hand)의 위치와 방향 가져오기
+            # Get the position and orientation of the end effector (right_hand)
             ee_body_id = self.sim.model.body_name2id("robot0_right_hand")
             ee_pos = self.sim.data.body_xpos[ee_body_id]
             ee_rot = R.from_matrix(self.sim.data.body_xmat[ee_body_id].reshape(3, 3))
 
-            # 카메라의 로컬 포즈
+            # Local pose of the camera
             camera_local_pos = np.array([0.05, 0, 0])
             camera_local_rot = R.from_quat([0, 0.707107, 0.707107, 0])
 
-            # 월드 좌표계에서의 카메라 위치 계산
+            # Calculate the camera position in world coordinates
             camera_world_pos = ee_pos + ee_rot.apply(camera_local_pos)
 
-            # 월드 좌표계에서의 카메라 방향 계산
+            # Calculate the camera orientation in world coordinates
             camera_world_rot = ee_rot * camera_local_rot
             camera_world_quat = camera_world_rot.as_quat()
 
-            # 카메라 포즈 저장
+            # save camera pose (realworld)
 
             # get intrinsics
             camera_intrinsics = CU.get_camera_intrinsic_matrix(
@@ -1425,7 +1386,6 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                 and (camera_intrinsics is not None)
                 and (camera_extrinsics is not None)
             ):
-                # numpy 배열을 리스트로 변환하고, Counter 객체는 딕셔너리로 변환
                 data = {
                     "camera_name": camera_name,
                     "cam_height": camera_height,
@@ -1438,7 +1398,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                     # "self.object_cfgs":str(self.object_cfgs),
                     # "depth_map": depth_map.tolist() if isinstance(depth_map, np.ndarray) else depth_map,
                 }
-                # json 파일로 저장
+
                 with open(pose_file, "w") as f:
                     json.dump(data, f, indent=4)
 
@@ -1635,26 +1595,22 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                 logging.debug(f"Camera '{camera}' moved to {new_pos}")
 
     def _update_camera_rotation(self, camera, wall_type):
-        # 원래 카메라 방향 저장 (아직 저장되지 않은 경우에만)
+        # Save the original camera direction (only if not already saved)
         if self.original_camera_rotation is None:
             self.original_camera_rotation = R.from_quat(
                 self._cam_configs[camera]["quat"]
             )
 
         if wall_type == "main" or wall_type == "default":
-            # 메인 벽일 때 원래 방향으로 복원
+            # Restore the original direction for the main wall
             rotation = self.original_camera_rotation
         elif wall_type == "left":
-            # 원래 방향에서 x축으로 -90도 회전
-            rotation = self.original_camera_rotation
-
+            # Rotate -90 degrees around the x-axis from the original direction
             rotation = self.original_camera_rotation * R.from_euler(
                 "x", -90, degrees=True
             )
         elif wall_type == "right":
-            # 원래 방향에서 x축으로 90도 회전
-            rotation = self.original_camera_rotation
-
+            # Rotate 90 degrees around the x-axis from the original direction
             rotation = self.original_camera_rotation * R.from_euler(
                 "x", 90, degrees=True
             )
@@ -1664,7 +1620,9 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             )
             rotation = self.original_camera_rotation
 
-        # 회전을 쿼터니온으로 변환하고 카메라 설정 업데이트
+        # Convert the rotation to a quaternion and update the camera settings
+        quat = rotation.as_quat()
+        self._cam_configs[camera]["quat"] = quat.tolist()
         quat = rotation.as_quat()
         self._cam_configs[camera]["quat"] = quat.tolist()
 
@@ -1679,8 +1637,6 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                 logging.debug(
                     f"Updated camera '{camera}' position to {new_pos} and rotation to {new_quat}"
                 )
-
-    # 기존 one_wall 꺼.. ==============================
 
     # Kitchen 클래스에 추가할 디버깅 메서드
     def debug_camera_directions(self):
@@ -1710,30 +1666,32 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         reward, done, info = super()._post_action(action)
 
         if self.moving_camera is True:
-            # layout 정보 추출
+            # Extract layout information
             self._extract_layout_info()
 
-            # layout 타입 결정
+            # Determine layout type
             self._determine_layout_type()
 
             self.generate_all_waypoints()
 
-            # 카메라 포즈를 실시간으로 업데이트
+            # Update camera poses in real-time
             self._update_camera_poses()
 
-            # 카메라 설정을 시뮬레이션에 적용
+            # Apply camera settings to the simulation
             self._apply_camera_updates()
 
-            #  카메라 방향 확인
+            # Check camera directions
             # self.debug_camera_directions()
 
-            # 위치 로깅
+            # Log positions
             # self.log_positions()
 
         self.update_state()
         self.save_images_and_pose()
 
         return reward, done, info
+
+    # +++ custom end  ==============================
 
     def convert_rel_to_abs_action(self, rel_action):
         # if moving mobile base, there is no notion of absolute actions.
