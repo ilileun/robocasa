@@ -63,10 +63,10 @@ class PnPCounterToCab(PnP):
             print(
                 "Warning: Island not found in the current layout. Using an alternative fixture."
             )
-            # 대체 fixture 사용 (예: 첫 번째 사용 가능한 counter)
+            # Use an alternative fixture (e.g., the first available counter)
             self.island = self.register_fixture_ref(
                 "island",
-                dict(id=FixtureType.COUNTER),  # island 대신 counter로 대체!!
+                dict(id=FixtureType.COUNTER),  # Replace island with counter
             )
 
         self.cab = self.register_fixture_ref("cab", dict(id=self.cab_id))
@@ -183,42 +183,35 @@ class PnPCounterToCab(PnP):
             )
         )
 
-        # cfgs.append(
-        #     dict(
-        #         name="tomato",  # 여기 이름은 자유롭게 가능
-        #         obj_groups="tomato",  # 오브젝트 이름 !
-        #         # placement=dict(
-        #         #     fixture=self.counter,
-        #         #     sample_region_kwargs=dict(
-        #         #         ref=self.cab,
-        #         #     ),
-        #         #     size=(0.35, 0.2),
-        #         #     pos=("ref", -1.0),
-        #         # ),
-        #         placement=dict(
-        #             fixture=self.island,
-        #             size=(0.0, 0.0),  # 이동할 수 있는 범위 설정
-        #             pos=(0.0, 0.0),
-        #             offset=(0.0, 0.0),
-        #         ),
-        #         ensure_object_boundary_in_range=True,
-        #     )
-        # )
+        # Add a tomato object to the island
+        cfgs.append(
+            dict(
+                name="tomato",  # Name of the object
+                obj_groups="tomato",  # Object group
+                placement=dict(
+                    fixture=self.island,
+                    size=(0.0, 0.0),  # Movement range
+                    pos=(0.0, 0.0),
+                    offset=(0.0, 0.0),
+                ),
+                ensure_object_boundary_in_range=True,
+            )
+        )
 
         """
         Get the object configurations for the counter to cabinet pick and place task.
         Spawns 30 objects randomly on the island.
         """
-        # Island의 크기를 가져옵니다. 이 부분은 실제 환경에 맞게 조정해야 할 수 있습니다.
+        # Get the size of the island. This part may need to be adjusted to fit the actual environment.
         island_size = self.island.size
         spawn_object_num = 30
 
-        # 30개의 object를 생성합니다.
+        # Create 30 objects.
         for i in range(spawn_object_num):
             cfgs.append(
                 dict(
-                    name=f"object_{i}",  # 각 객체에 고유한 이름을 부여합니다.
-                    obj_groups="all",  # 모든 객체 그룹에서 선택합니다. 필요에 따라 변경 가능합니다.
+                    name=f"object_{i}",  # Assign a unique name to each object.
+                    obj_groups="all",  # Select from all object groups. Change as needed.
                     # graspable=True,
                     # cookable=True,
                     placement=dict(
@@ -226,17 +219,17 @@ class PnPCounterToCab(PnP):
                         size=(
                             island_size[0] * 0.6,
                             island_size[1] * 0.6,
-                        ),  # island 크기의 80%를 사용 영역으로 설정
-                        pos=(0.0, 0.0),  # island의 중심을 기준으로 합니다.
+                        ),  # Set the usable area to 60% of the island size
+                        pos=(0.0, 0.0),  # Centered on the island
                         offset=(0.0, 0.0),
                     ),
                     ensure_object_boundary_in_range=True,
                 )
             )
 
-        # spawn 되는 물체의 상세 정보..
+        # Log the details of the spawned objects.
         # logger.info(f"Distractor in cabinet configuration: {cfgs}")
-        # spawn 되는 물체의 개수..
+        # Log the total number of spawned objects.
         logger.info(f"Total number of object configurations: {len(cfgs)}")
 
         return cfgs
