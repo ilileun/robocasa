@@ -1,3 +1,4 @@
+# camera_utils.py
 """
 Collection of constants for cameras / robots / etc
 in kitchen environments
@@ -44,46 +45,38 @@ DEFAULT_LAYOUT_CAM = {
     "elevation": -18.02177994296577,
 }
 
-import numpy as np
-from scipy.spatial.transform import Rotation
-
-
-def get_camera_direction_quat(look_at, up=[0, 0, 1]):
-    """
-    카메라가 특정 방향을 바라보도록 하는 쿼터니온을 계산합니다.
-    look_at: 카메라가 바라볼 방향 벡터
-    up: 카메라의 상단 방향 벡터
-    """
-    look_at = np.array(look_at) / np.linalg.norm(look_at)
-    up = np.array(up) / np.linalg.norm(up)
-    right = np.cross(look_at, up)
-    up = np.cross(right, look_at)
-    rot_matrix = np.array([right, up, -look_at]).T
-    return Rotation.from_matrix(rot_matrix).as_quat()
-
-
-# 주방을 바라보는 방향 (x축 음의 방향)
-main_wall_direction = [-1, 0, 0]
-camera_quat = get_camera_direction_quat(main_wall_direction)
-
-# y축을 중심으로 90도 회전을 추가
-y_rotation = Rotation.from_euler("y", 90, degrees=True)
-camera_quat_rotated = (y_rotation * Rotation.from_quat(camera_quat)).as_quat()
-
 CAM_CONFIGS = dict(
     robot0_agentview_center=dict(
-        pos=[2.0, 0.0, 1.4],  # 주방 오른쪽에서 바라보는 위치
-        quat=camera_quat_rotated,
+        pos=[-0.6, 0.0, 1.15],
+        # jieun pose change test
+        # 카메라 위치 변경!!
+        quat=[
+            0.636945903301239,
+            0.3325185477733612,
+            -0.3199238181114197,
+            -0.6175596117973328,
+        ],
+        # pos=[-0, 0, 3.5],  # 월드의 위쪽에서
+        # quat=[1, 0, 0, 0],  # 정면을 향하도록
+        camera_attribs=dict(fovy="75"),
+        parent_body="base0_support",
     ),
     robot0_agentview_left=dict(
-        pos=[2.0, -0.5, 1.4],
-        quat=camera_quat_rotated,
-        camera_attribs=dict(fovy="60"),
+        pos=[-0.5, 0.35, 1.05],
+        quat=[0.55623853, 0.29935253, -0.37678665, -0.6775092],
+        camera_attribs=dict(fovy="75"),
+        parent_body="base0_support",
     ),
     robot0_agentview_right=dict(
-        pos=[2.0, 0.5, 1.4],
-        quat=camera_quat_rotated,
-        camera_attribs=dict(fovy="60"),
+        pos=[-0.5, -0.35, 1.05],
+        quat=[
+            0.6775091886520386,
+            0.3767866790294647,
+            -0.2993525564670563,
+            -0.55623859167099,
+        ],
+        camera_attribs=dict(fovy="75"),
+        parent_body="base0_support",
     ),
     robot0_frontview=dict(
         pos=[-0.50, 0, 0.95],
@@ -93,7 +86,7 @@ CAM_CONFIGS = dict(
             -0.3673907518386841,
             -0.5905545353889465,
         ],
-        camera_attribs=dict(fovy="60"),
+        camera_attribs=dict(fovy="75"),
         parent_body="base0_support",
     ),
     robot0_eye_in_hand=dict(
@@ -101,9 +94,4 @@ CAM_CONFIGS = dict(
         quat=[0, 0.707107, 0.707107, 0],
         parent_body="robot0_right_hand",
     ),
-    # new_camera=dict(
-    #     pos=[0.0, 0.0, 0.0],
-    #     quat=[0.0, 0.0, 0.0, 1.0],
-    #     parent_body="",
-    # ),
 )

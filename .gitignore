@@ -139,3 +139,8 @@ robocasa/models/assets/textures
 
 # midjourney-generated textures
 robocasa/models/assets/generative_textures
+
+
+# dataset 
+robocasa/rgb_d_gen/
+robocasa/rgb_d_gen_sample/

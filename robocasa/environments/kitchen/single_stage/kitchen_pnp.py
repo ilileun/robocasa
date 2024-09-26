@@ -183,27 +183,27 @@ class PnPCounterToCab(PnP):
             )
         )
 
-        cfgs.append(
-            dict(
-                name="tomato",  # 여기 이름은 자유롭게 가능
-                obj_groups="tomato",  # 오브젝트 이름 !
-                # placement=dict(
-                #     fixture=self.counter,
-                #     sample_region_kwargs=dict(
-                #         ref=self.cab,
-                #     ),
-                #     size=(0.35, 0.2),
-                #     pos=("ref", -1.0),
-                # ),
-                placement=dict(
-                    fixture=self.island,
-                    size=(0.0, 0.0),  # 이동할 수 있는 범위 설정
-                    pos=(0.0, 0.0),
-                    offset=(0.0, 0.0),
-                ),
-                ensure_object_boundary_in_range=True,
-            )
-        )
+        # cfgs.append(
+        #     dict(
+        #         name="tomato",  # 여기 이름은 자유롭게 가능
+        #         obj_groups="tomato",  # 오브젝트 이름 !
+        #         # placement=dict(
+        #         #     fixture=self.counter,
+        #         #     sample_region_kwargs=dict(
+        #         #         ref=self.cab,
+        #         #     ),
+        #         #     size=(0.35, 0.2),
+        #         #     pos=("ref", -1.0),
+        #         # ),
+        #         placement=dict(
+        #             fixture=self.island,
+        #             size=(0.0, 0.0),  # 이동할 수 있는 범위 설정
+        #             pos=(0.0, 0.0),
+        #             offset=(0.0, 0.0),
+        #         ),
+        #         ensure_object_boundary_in_range=True,
+        #     )
+        # )
 
         """
         Get the object configurations for the counter to cabinet pick and place task.
@@ -211,7 +211,7 @@ class PnPCounterToCab(PnP):
         """
         # Island의 크기를 가져옵니다. 이 부분은 실제 환경에 맞게 조정해야 할 수 있습니다.
         island_size = self.island.size
-        spawn_object_num = 10
+        spawn_object_num = 30
 
         # 30개의 object를 생성합니다.
         for i in range(spawn_object_num):
@@ -219,12 +219,13 @@ class PnPCounterToCab(PnP):
                 dict(
                     name=f"object_{i}",  # 각 객체에 고유한 이름을 부여합니다.
                     obj_groups="all",  # 모든 객체 그룹에서 선택합니다. 필요에 따라 변경 가능합니다.
-                    graspable=True,
+                    # graspable=True,
+                    # cookable=True,
                     placement=dict(
                         fixture=self.island,
                         size=(
-                            island_size[0] * 0.8,
-                            island_size[1] * 0.8,
+                            island_size[0] * 0.6,
+                            island_size[1] * 0.6,
                         ),  # island 크기의 80%를 사용 영역으로 설정
                         pos=(0.0, 0.0),  # island의 중심을 기준으로 합니다.
                         offset=(0.0, 0.0),

@@ -39,11 +39,14 @@ from robocasa.utils.texture_swap import (
 
 
 # jieun add========================================
-
+import time
 import logging
 import yaml
 from robocasa.models.scenes.scene_registry import get_layout_path
 from scipy.spatial.transform import Rotation as R
+import matplotlib.pyplot as plt
+
+import robosuite.utils.camera_utils as CU
 
 
 # logging.basicConfig(level=logging.DEBUG)
@@ -245,6 +248,16 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
 
         # JIEUN ADD ========================================
 
+        # 이미지 저장을 위한 경로 설정
+        self.base_path = "/home/libra/git/cotap_ws/dynamic_scene_graph/data_gen/robocasa/robocasa/rgb_d_gen"
+        self.rgb_path = os.path.join(self.base_path, "rgb")
+        self.depth_path = os.path.join(self.base_path, "depth")
+        os.makedirs(self.rgb_path, exist_ok=True)
+        os.makedirs(self.depth_path, exist_ok=True)
+
+        # 키보드 입력 감지를 위한 변수
+        self.save_image_flag = False
+
         ####### yaml 파일 읽어오기
         self.moving_camera = False
         self.layout_objects = {}
@@ -267,6 +280,9 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         self.waypoints = self.generate_waypoints(0, 4, 0.05)
 
         self.original_camera_rotation = None
+
+        self.robot_base_ori = None
+        self.robot_base_pose = None
 
         # =================================================
 
@@ -558,6 +574,10 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                         ),
                     )
 
+            # logging.debug("addl_obj_cfgs: {}".format(addl_obj_cfgs))
+            # logging.debug("self.object_cfgs: {}".format(self.object_cfgs))
+            # logging.debug("self.objects: {}".format(self.objects))
+
             # prepend the new object configs in
             self.object_cfgs = addl_obj_cfgs + self.object_cfgs
 
@@ -584,10 +604,10 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             return
         self.object_placements = object_placements
 
-        logging.info("self.layout_id: {}".format(self.layout_id))
-        logging.debug("self.style_id: {}".format(self.style_id))
-        logging.debug("self.layout_and_style_ids: {}".format(self.layout_and_style_ids))
-        logging.debug(f"Initial camera position: {self._cam_configs}")
+        # logging.info("self.layout_id: {}".format(self.layout_id))
+        # logging.debug("self.style_id: {}".format(self.style_id))
+        # logging.debug("self.layout_and_style_ids: {}".format(self.layout_and_style_ids))
+        # logging.debug(f"Initial camera position: {self._cam_configs}")
 
     def _setup_kitchen_references(self):
         """
@@ -668,6 +688,10 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             0:2
         ]
         robot_base_ori = np.array([0, 0, base_fixture.rot + np.pi / 2])
+
+        # 여기 로봇 위치 실시간 추정
+        self.robot_base_ori = robot_base_ori
+        self.robot_base_pose = robot_base_pos
 
         return robot_base_pos, robot_base_ori
 
@@ -1257,6 +1281,172 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
 
     # 기존 one_wall 꺼.. ==============================
 
+    def set_save_image_flag(self):
+        self.save_image_flag = True
+
+    def save_images_and_pose(self):
+        if self.save_image_flag:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+            # 환경 셋업 정보 불러오는 경우
+            env = self
+            # obs_dict = env.reset()
+
+            camera_name = env.camera_names[0]
+            camera_height = env.camera_heights[0]
+            camera_width = env.camera_widths[0]
+            logging.info(
+                f"camera_name: {camera_name}, camera_height: {camera_height}, camera_width: {camera_width}"
+            )
+            # image = obs_dict["{}_image".format(camera_name)][::-1]
+
+            # RGB 이미지 저장
+
+            image = self.sim.render(
+                camera_name="robot0_eye_in_hand",
+                width=camera_width,
+                height=camera_height,
+            )[::-1]
+            rgb_file = os.path.join(self.rgb_path, f"rgb_image_{timestamp}.png")
+            depth_file = os.path.join(self.depth_path, f"depth_map_{timestamp}.png")
+
+            plt.imsave(rgb_file, image)
+
+            # Depth 맵 저장
+            depth_map = None
+
+            try:
+                depth_map_check = self.sim.render(
+                    camera_name="robot0_eye_in_hand",
+                    width=camera_width,
+                    height=camera_height,
+                    depth=True,
+                )
+                depth_map = depth_map_check[1]
+
+                # unnormalized depth map
+                # 깊이 맵 언노멀라이즈 (MuJoCo의 경우)
+                # extent = self.sim.model.stat.extent
+                # near = self.sim.model.vis.map.znear * extent
+                # far = self.sim.model.vis.map.zfar * extent
+
+                # # 깊이 값을 실제 거리(미터)로 변환
+                # depth_map = near / (1 - depth_map * (1 - near / far))
+                # logging.info(f'exent: {extent}, near: {near}, far: {far}')
+
+                # unnormalized depth map
+                # depth_map = obs_dict["{}_depth".format(camera_name)][::-1]
+                # depth_map = CU.get_real_depth_map(sim=env.sim, depth_map=depth_map)
+
+                # depth_map_check는 (RGB 이미지, 깊이 맵)의 튜플이므로, 두 번째 요소인 깊이 맵만 사용
+                # depth_map = CU.get_real_depth_map(sim=env.sim, depth_map=depth_map_check[1])
+                depth_map = depth_map[::-1]
+
+                # (Pdb) depth_map.shape
+                # (512, 512, 1)
+
+                # breakpoint()
+                # =========================
+
+                # if isinstance(depth_map, tuple) and len(depth_map) == 2:
+                #     depth_map = depth_map[0]
+
+                # depth_map = np.array(depth_map)
+
+                # if depth_map.ndim > 2:
+                #     depth_map = depth_map[:, :, 0]
+
+                # logging.info(f"Depth map shape: {depth_map.shape}, dtype: {depth_map.dtype}")
+
+                # 깊이 맵의 최소값과 최대값 로깅
+                # logging.info(f"Depth map min: {np.min(depth_map)}, max: {np.max(depth_map)}")
+                # logging.info(f"Depth map:{depth_map}")
+
+                # depth_map_normalized = (depth_map - np.min(depth_map)) / (np.max(depth_map) - np.min(depth_map))
+                # plt.imsave(depth_file, depth_map_normalized, cmap='gray')
+                # plt.imsave(depth_file, depth_map, cmap='gray')
+                plt.imsave(depth_file, depth_map)
+
+            except Exception as e:
+                logging.error(f"Error saving depth map: {e}")
+
+            ### 카메라 포즈를 월드 좌표계로 변환
+
+            # 엔드 이펙터(right_hand)의 위치와 방향 가져오기
+            ee_body_id = self.sim.model.body_name2id("robot0_right_hand")
+            ee_pos = self.sim.data.body_xpos[ee_body_id]
+            ee_rot = R.from_matrix(self.sim.data.body_xmat[ee_body_id].reshape(3, 3))
+
+            # 카메라의 로컬 포즈
+            camera_local_pos = np.array([0.05, 0, 0])
+            camera_local_rot = R.from_quat([0, 0.707107, 0.707107, 0])
+
+            # 월드 좌표계에서의 카메라 위치 계산
+            camera_world_pos = ee_pos + ee_rot.apply(camera_local_pos)
+
+            # 월드 좌표계에서의 카메라 방향 계산
+            camera_world_rot = ee_rot * camera_local_rot
+            camera_world_quat = camera_world_rot.as_quat()
+
+            # 카메라 포즈 저장
+
+            # get intrinsics
+            camera_intrinsics = CU.get_camera_intrinsic_matrix(
+                sim=env.sim,
+                camera_name=camera_name,
+                camera_height=camera_height,
+                camera_width=camera_width,
+            )
+
+            # get extrinsics
+            camera_extrinsics = CU.get_camera_extrinsic_matrix(
+                sim=env.sim,
+                camera_name=camera_name,
+            )
+
+            # get camera matrices
+            world_to_camera = CU.get_camera_transform_matrix(
+                sim=env.sim,
+                camera_name=camera_name,
+                camera_height=camera_height,
+                camera_width=camera_width,
+            )
+
+            # get camera pose in world coordinates
+            camera_to_world = np.linalg.inv(world_to_camera)
+
+            ##  rgb-d  using json
+            import json
+            from collections import Counter
+
+            pose_file = os.path.join(self.base_path, f"camera_pose_{timestamp}.json")
+            if (
+                (depth_map is not None)
+                and (camera_intrinsics is not None)
+                and (camera_extrinsics is not None)
+            ):
+                # numpy 배열을 리스트로 변환하고, Counter 객체는 딕셔너리로 변환
+                data = {
+                    "camera_name": camera_name,
+                    "cam_height": camera_height,
+                    "cam_width": camera_width,
+                    "before: cam_pos": str(camera_world_pos),
+                    "before: cam_quat": str(camera_world_quat),
+                    "Position & Rotation (world)": str(camera_to_world),
+                    "camera_intrinsics": str(camera_intrinsics),
+                    "camera_extrinsics": str(camera_extrinsics),
+                    # "self.object_cfgs":str(self.object_cfgs),
+                    # "depth_map": depth_map.tolist() if isinstance(depth_map, np.ndarray) else depth_map,
+                }
+                # json 파일로 저장
+                with open(pose_file, "w") as f:
+                    json.dump(data, f, indent=4)
+
+            print(
+                f"Saved RGB image, depth map, and camera pose (world coordinates) for timestamp: {timestamp}"
+            )
+            self.save_image_flag = False  # Reset the flag
+
     def log_positions(self):
         for camera in self._cam_configs:
             if "agentview" in camera:
@@ -1541,6 +1731,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             # self.log_positions()
 
         self.update_state()
+        self.save_images_and_pose()
 
         return reward, done, info
 
