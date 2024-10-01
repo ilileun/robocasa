@@ -15,6 +15,7 @@ from robosuite.utils.mjcf_utils import (
 )
 from robosuite.utils.observables import Observable, sensor
 from robosuite.environments.base import EnvMeta
+
 from scipy.spatial.transform import Rotation, Slerp
 import robocasa
 import robocasa.macros as macros
@@ -47,7 +48,7 @@ from scipy.spatial.transform import Rotation as R
 import matplotlib.pyplot as plt
 
 import robosuite.utils.camera_utils as CU
-
+from robosuite.utils.binding_utils import MjSim
 
 # logging.basicConfig(level=logging.DEBUG)
 logging.basicConfig(
@@ -264,7 +265,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         self.moving_camera = False
 
         # True will save rgb-depth image using keyboard press "5"
-        self.rgb_d_image = False
+        self.rgb_d_image = True
 
         self.layout_objects = {}
         self.wall_info = {}
@@ -608,12 +609,140 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                 print("Could not place objects. Trying again with self._load_model()")
             self._load_model()
             return
+        # object_placements 보니깐 object 이름이랑 위치, 방향이랑 같이 들어가 있음
         self.object_placements = object_placements
 
         # logging.info("self.layout_id: {}".format(self.layout_id))
         # logging.debug("self.style_id: {}".format(self.style_id))
         # logging.debug("self.layout_and_style_ids: {}".format(self.layout_and_style_ids))
         # logging.debug(f"Initial camera position: {self._cam_configs}")
+
+        # print(f"Number of successfully created objects: {len(self.objects)}")
+        # print(f"Object names: {list(self.objects.keys())}")
+        # print(f"Number of object configurations: {len(self.object_cfgs)}")
+        # print(f"Object configuration names: {[cfg['name'] for cfg in self.object_cfgs]}")
+
+    # 추가 해서 self.object_info에 각 객체의 레이블과 3D 바운딩 박스 정보가 저장시킴
+    def _get_object_info(self):
+        object_info = {}
+        for name, obj in self.objects.items():
+            cfg = next((cfg for cfg in self.object_cfgs if cfg["name"] == name), None)
+            if cfg:
+                label = (
+                    cfg["info"]["groups_containing_sampled_obj"][1]
+                    if "info" in cfg and "groups_containing_sampled_obj" in cfg["info"]
+                    else "Unknown"
+                )
+                bbox_center = self.sim.data.body_xpos[self.obj_body_id[name]]
+                bbox_size = obj.get_bounding_box_size()
+
+                # Convert rotation matrix to quaternion
+                rot_mat = self.sim.data.body_xmat[self.obj_body_id[name]].reshape(3, 3)
+                rot_quat = T.mat2quat(rot_mat)
+
+                bbox_corners = obj.get_bbox_points(bbox_center, rot_quat)
+
+                object_info[name] = {
+                    "label": label,
+                    "bbox_center": bbox_center,
+                    "bbox_size": bbox_size,
+                    "bbox_corners": bbox_corners,
+                }
+
+        return object_info
+
+    def _get_fixture_info(self):
+        fixture_info = {}
+
+        # Get body IDs for all fixtures
+        fixture_body_ids = {
+            name: self.sim.model.body_name2id(model.root_body)
+            for name, model in self.fixtures.items()
+        }
+
+        # Define the types we want to keep
+        keep_types = [
+            "CoffeeMachine",
+            "Fridge",
+            "Stove",
+            "Toaster",
+            "Microwave",
+            "Sink",
+            "Hood",
+            "Oven",
+            "Dishwasher",
+            "Accessory",
+        ]
+
+        for name, fixture_model in self.fixtures.items():
+            fixture = self.get_fixture(name)
+            # Check if the fixture type is in the keep_types list
+            if type(fixture).__name__ in keep_types:
+
+                bbox_size = fixture.get_bounding_box_half_size() * 2
+
+                # Get the body ID of the fixture
+                fixture_body_id = fixture_body_ids[name]
+
+                # Get the rotation matrix of the fixture
+                rot_mat = self.sim.data.body_xmat[fixture_body_id].reshape(3, 3)
+
+                # Convert rotation matrix to quaternion
+                rot_quat = T.mat2quat(rot_mat)
+
+                # Calculate bounding box corners directly using bbox_center and bbox_size
+                bbox_center = fixture.pos
+                bbox_corners = [
+                    [
+                        bbox_center[0] - bbox_size[0] / 2,
+                        bbox_center[1] - bbox_size[1] / 2,
+                        bbox_center[2] - bbox_size[2] / 2,
+                    ],
+                    [
+                        bbox_center[0] + bbox_size[0] / 2,
+                        bbox_center[1] - bbox_size[1] / 2,
+                        bbox_center[2] - bbox_size[2] / 2,
+                    ],
+                    [
+                        bbox_center[0] - bbox_size[0] / 2,
+                        bbox_center[1] + bbox_size[1] / 2,
+                        bbox_center[2] - bbox_size[2] / 2,
+                    ],
+                    [
+                        bbox_center[0] + bbox_size[0] / 2,
+                        bbox_center[1] + bbox_size[1] / 2,
+                        bbox_center[2] - bbox_size[2] / 2,
+                    ],
+                    [
+                        bbox_center[0] - bbox_size[0] / 2,
+                        bbox_center[1] - bbox_size[1] / 2,
+                        bbox_center[2] + bbox_size[2] / 2,
+                    ],
+                    [
+                        bbox_center[0] + bbox_size[0] / 2,
+                        bbox_center[1] - bbox_size[1] / 2,
+                        bbox_center[2] + bbox_size[2] / 2,
+                    ],
+                    [
+                        bbox_center[0] - bbox_size[0] / 2,
+                        bbox_center[1] + bbox_size[1] / 2,
+                        bbox_center[2] + bbox_size[2] / 2,
+                    ],
+                    [
+                        bbox_center[0] + bbox_size[0] / 2,
+                        bbox_center[1] + bbox_size[1] / 2,
+                        bbox_center[2] + bbox_size[2] / 2,
+                    ],
+                ]
+
+                fixture_info[name] = {
+                    "type": type(fixture).__name__,
+                    "bbox_center": bbox_center,
+                    "bbox_size": bbox_size,
+                    "bbox_corners": bbox_corners,
+                }
+
+        return fixture_info
 
     def _setup_kitchen_references(self):
         """
@@ -931,6 +1060,12 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             self.sim.step2()
             policy_step = False
 
+        # Add this at the end of the method
+
+        self.object_info = self._get_object_info()
+        self.fixture_info = self._get_fixture_info()  # fixture_info 설정
+        # logging.info(f"!!!!!!!!!!!!!!!!!!!!!! Object info: {self.object_info}")
+
     def _get_obj_cfgs(self):
         """
         Returns a list of object configurations to use in the environment.
@@ -1211,7 +1346,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                 sampling_rate=self.control_freq,
                 active=active,
             )
-
+        # breakpoint()
         return observables
 
     def _create_obj_sensors(self, obj_name, modality="object"):
@@ -1235,6 +1370,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
 
         @sensor(modality=modality)
         def obj_pos(obs_cache):
+            # breakpoint()
             return np.array(self.sim.data.body_xpos[self.obj_body_id[obj_name]])
 
         @sensor(modality=modality)
@@ -1282,7 +1418,6 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             f"{obj_name}_to_{pf}eef_pos",
             f"{obj_name}_to_{pf}eef_quat",
         ]
-
         return sensors, names
 
     # +++ custom start  ==============================
@@ -1401,8 +1536,8 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                     "Position & Rotation (world)": str(camera_to_world),
                     "camera_intrinsics": str(camera_intrinsics),
                     "camera_extrinsics": str(camera_extrinsics),
-                    # "self.object_cfgs":str(self.object_cfgs),
-                    # "depth_map": depth_map.tolist() if isinstance(depth_map, np.ndarray) else depth_map,
+                    "object_info": str(self.object_info),  # self.object_info 추가
+                    "fixture_info": str(self.fixture_info),  # fixture_info 추가
                 }
 
                 with open(pose_file, "w") as f:
@@ -1411,6 +1546,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             print(
                 f"Saved RGB image, depth map, and camera pose (world coordinates) for timestamp: {timestamp}"
             )
+            # breakpoint()
             self.save_image_flag = False  # Reset the flag
 
     def log_positions(self):
@@ -2006,7 +2142,7 @@ class KitchenDemo(Kitchen):
 
     def _get_obj_cfgs(self):
         cfgs = []
-
+        # breakpoint()
         for i in range(self.num_objs):
             cfgs.append(
                 dict(

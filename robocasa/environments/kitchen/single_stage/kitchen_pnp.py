@@ -59,6 +59,7 @@ class PnPCounterToCab(PnP):
                 "island",
                 dict(id=FixtureType.ISLAND),
             )
+
         except AssertionError:
             print(
                 "Warning: Island not found in the current layout. Using an alternative fixture."
@@ -94,8 +95,12 @@ class PnPCounterToCab(PnP):
             "fridge",
             dict(id=FixtureType.FRIDGE),
         )
+        self.stove = self.register_fixture_ref(
+            "stove",
+            dict(id=FixtureType.STOVE),
+        )
 
-        self.init_robot_base_pos = self.island
+        self.init_robot_base_pos = self.stove
 
         logger.debug(
             f"Kitchen references set up: cab={self.cab}, counter={self.counter}"
@@ -122,11 +127,11 @@ class PnPCounterToCab(PnP):
         Resets simulation internal configurations.
         """
         super()._reset_internal()
-        # self.cab.set_door_state(min=0.90, max=1.0, env=self, rng=self.rng)
+        self.cab.set_door_state(min=0.90, max=1.0, env=self, rng=self.rng)
 
         ##############################
 
-        # self.microwave.set_door_state(min=0.90, max=1.0, env=self, rng=self.rng)
+        self.microwave.set_door_state(min=0.90, max=1.0, env=self, rng=self.rng)
 
     def _get_obj_cfgs(self):
         """
@@ -183,20 +188,66 @@ class PnPCounterToCab(PnP):
             )
         )
 
-        # Add a tomato object to the island
-        cfgs.append(
-            dict(
-                name="tomato",  # Name of the object
-                obj_groups="tomato",  # Object group
-                placement=dict(
-                    fixture=self.island,
-                    size=(0.0, 0.0),  # Movement range
-                    pos=(0.0, 0.0),
-                    offset=(0.0, 0.0),
-                ),
-                ensure_object_boundary_in_range=True,
-            )
-        )
+        # # Add a tomato object to the island
+        # cfgs.append(
+        #     dict(
+        #         name="tomato",  # Name of the object
+        #         obj_groups="tomato",  # Object group
+        #         placement=dict(
+        #             fixture=self.island,
+        #             size=(0.0, 0.0),  # Movement range
+        #             pos=(0.0, 0.0),
+        #             offset=(0.0, 0.0),
+        #         ),
+        #         ensure_object_boundary_in_range=True,
+        #     )
+        # )
+
+        # cfgs.append(
+        #     dict(
+        #         name="pan",
+        #         obj_groups="pan",
+        #         placement=dict(
+        #             fixture=self.counter,
+        #             # ensure_object_boundary_in_range=False because the pans handle is a part of the
+        #             # bounding box making it hard to place it if set to True
+        #             # ensure_object_boundary_in_range=False,
+        #             sample_region_kwargs=dict(ref=self.stove, top_size=(0.50, 0.40)),
+        #             size=(0.25, 0.05),
+        #             pos=("ref", 0.0),
+        #         ),
+        #     )
+        # )
+
+        # cfgs.append(
+        #     dict(
+        #         name="tomato",
+        #         obj_groups="tomato",
+        #         placement=dict(
+        #             fixture=self.counter,
+        #             sample_region_kwargs=dict(
+        #                 ref=self.stove,
+        #             ),
+        #             size=(0.35, 0.2),
+        #             pos=("ref", -1.0),
+        #         ),
+        #     )
+        # )
+
+        # cfgs.append(
+        #     dict(
+        #         name="onion",
+        #         obj_groups="onion",
+        #         placement=dict(
+        #             fixture=self.counter,
+        #             sample_region_kwargs=dict(
+        #                 ref=self.stove,
+        #             ),
+        #             size=(0.35, 0.2),
+        #             pos=("ref", 0.0),
+        #         ),
+        #     )
+        # )
 
         """
         Get the object configurations for the counter to cabinet pick and place task.
@@ -204,7 +255,7 @@ class PnPCounterToCab(PnP):
         """
         # Get the size of the island. This part may need to be adjusted to fit the actual environment.
         island_size = self.island.size
-        spawn_object_num = 30
+        spawn_object_num = 5
 
         # Create 30 objects.
         for i in range(spawn_object_num):
@@ -215,7 +266,7 @@ class PnPCounterToCab(PnP):
                     # graspable=True,
                     # cookable=True,
                     placement=dict(
-                        fixture=self.island,
+                        fixture=self.counter,
                         size=(
                             island_size[0] * 0.6,
                             island_size[1] * 0.6,
@@ -223,7 +274,8 @@ class PnPCounterToCab(PnP):
                         pos=(0.0, 0.0),  # Centered on the island
                         offset=(0.0, 0.0),
                     ),
-                    ensure_object_boundary_in_range=True,
+                    # ensure_object_boundary_in_range=True,
+                    # ensure_valid_placement=True,
                 )
             )
 
