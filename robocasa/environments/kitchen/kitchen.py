@@ -54,7 +54,8 @@ from robosuite.utils.binding_utils import MjSim
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
 )
-
+import cv2
+from PIL import Image, ImageDraw, ImageFont
 
 # =================================================
 REGISTERED_KITCHEN_ENVS = {}
@@ -253,8 +254,14 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         self.base_path = "/home/libra/git/cotap_ws/dynamic_scene_graph/data_gen/robocasa/robocasa/rgb_d_gen"
         self.rgb_path = os.path.join(self.base_path, "rgb")
         self.depth_path = os.path.join(self.base_path, "depth")
+        self.seg_path = os.path.join(self.base_path, "seg")  # segmentation image
+        self.seg_label_path = os.path.join(
+            self.base_path, "seg_label"
+        )  # segmentation label
+        os.makedirs(self.seg_label_path, exist_ok=True)
         os.makedirs(self.rgb_path, exist_ok=True)
         os.makedirs(self.depth_path, exist_ok=True)
+        os.makedirs(self.seg_path, exist_ok=True)
 
         # Variable for detecting keyboard input
         self.save_image_flag = False
@@ -1421,6 +1428,93 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
         return sensors, names
 
     # +++ custom start  ==============================
+    def get_segmentation_mapping(self):
+        """
+        세그멘테이션 ID와 객체 이름 간의 매핑을 생성합니다.
+        """
+        mapping = {}
+        for i in range(self.sim.model.ngeom):
+            geom_id = i + 1  # MuJoCo에서 geom ID는 1부터 시작합니다
+            geom_name = self.sim.model.geom_id2name(i)
+            if geom_name:
+                mapping[geom_id] = geom_name
+        return mapping
+
+    def filter_segmentation(self, seg_map, seg_mapping):
+        # RGBA 이미지 생성 (알파 채널 포함)
+        height, width = seg_map.shape
+        rgba_seg_map = np.zeros((height, width, 4), dtype=np.uint8)
+
+        for id, name in seg_mapping.items():
+            mask = seg_map == int(id)
+            if not name.startswith(("base", "robot")) and id != -1:
+                # 유지하려는 객체에 대해 색상과 불투명도 설정
+                color = np.array(
+                    [id % 256, (id // 256) % 256, (id // 65536) % 256, 255],
+                    dtype=np.uint8,
+                )
+                rgba_seg_map[mask] = color
+
+        return rgba_seg_map
+
+    def add_labels_to_segmentation(self, seg_map, visible_mapping):
+        # Convert seg_map to RGB image
+        seg_rgb = cv2.cvtColor(seg_map.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+
+        # Convert to PIL Image for text drawing
+        pil_image = Image.fromarray(seg_rgb)
+        draw = ImageDraw.Draw(pil_image)
+
+        # Use a default font if you don't want to specify a font file
+        font = ImageFont.load_default()
+
+        for id, name in visible_mapping.items():
+            # Find positions of this ID in the segmentation map
+            positions = np.where(seg_map == int(id))
+            if len(positions[0]) > 0:
+                # Get the center position of this object
+                y, x = int(np.mean(positions[0])), int(np.mean(positions[1]))
+
+                # Draw the ID and truncated name
+                text = f"{id}: {name[:10]}..."  # Truncate name to first 10 chars
+                draw.text((x, y), text, fill=(255, 0, 0), font=font)
+
+        return np.array(pil_image)
+
+    def align_segmentation_with_rgb(self, rgb_image, seg_map, seg_mapping):
+        # RGB 이미지에서 완전히 투명한 픽셀(알파값이 0인 픽셀) 마스크 생성
+        if rgb_image.shape[2] == 4:  # RGBA 이미지인 경우
+            mask = rgb_image[:, :, 3] > 0
+        else:  # RGB 이미지인 경우
+            mask = np.any(rgb_image > 0, axis=2)
+
+        # 마스크를 사용하여 세그멘테이션 맵 필터링
+        filtered_seg_map = seg_map.copy()
+        filtered_seg_map[~mask] = 0  # 마스크에 해당하지 않는 부분은 0(배경)으로 설정
+
+        # 시각화를 위한 RGB 맵 생성
+        visual_seg_map = np.zeros(
+            (seg_map.shape[0], seg_map.shape[1], 3), dtype=np.uint8
+        )
+
+        for id in np.unique(filtered_seg_map):
+            if id != 0:  # 배경이 아닌 경우
+                # 시각화 맵에 컬러 할당 (예: ID를 RGB 값으로 변환)
+                color = np.array(
+                    [id % 256, (id // 256) % 256, (id // 65536) % 256], dtype=np.uint8
+                )
+                visual_seg_map[filtered_seg_map == id] = color
+
+        # 보이는 객체들의 매핑 생성
+        visible_mapping = {
+            int(id): seg_mapping.get(int(id), "Unknown")
+            for id in np.unique(filtered_seg_map)
+            if id != 0
+            and not seg_mapping.get(int(id), "").startswith(("base", "robot"))
+            and id != -1
+        }
+
+        return filtered_seg_map, visual_seg_map, visible_mapping
 
     def set_save_image_flag(self):
         self.save_image_flag = True
@@ -1472,6 +1566,50 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             except Exception as e:
                 logging.error(f"Error saving depth map: {e}")
 
+            try:
+                seg_map = self.sim.render(
+                    camera_name="robot0_eye_in_hand",
+                    width=camera_width,
+                    height=camera_height,
+                    depth=False,
+                    segmentation=True,
+                )[::-1]
+                seg_map = seg_map[:, :, 1]  # 세그멘테이션 정보는 두 번째 채널에 있음
+
+                # 전체 매핑 가져오기
+                seg_mapping = self.get_segmentation_mapping()
+
+                # 세그멘테이션 맵 필터링
+                filtered_seg_map = self.filter_segmentation(seg_map, seg_mapping)
+
+                # 필터링된 세그멘테이션 맵 저장 (PNG 형식으로 저장하여 투명도 유지)
+                seg_file = os.path.join(
+                    self.seg_path, f"filtered_seg_map_{timestamp}.png"
+                )
+                Image.fromarray(filtered_seg_map, mode="RGBA").save(seg_file)
+
+                # 보이는 객체들의 고유한 ID 추출 (필터링 후, 투명한 부분 제외)
+                unique_ids = np.unique(filtered_seg_map[:, :, 3].nonzero()[0])
+
+                # 현재 보이는 객체들의 매핑만 추출
+                visible_mapping = {
+                    int(id): seg_mapping.get(int(id), "Unknown")
+                    for id in unique_ids
+                    if not seg_mapping.get(int(id), "").startswith(("base", "robot"))
+                    and id != -1
+                }
+
+                # 라벨이 추가된 세그멘테이션 이미지 생성 (필요한 경우)
+                # labeled_seg_map = self.add_labels_to_segmentation(filtered_seg_map, visible_mapping)
+
+                # # 라벨이 추가된 세그멘테이션 이미지 저장
+                # labeled_seg_file = os.path.join(self.seg_label_path, f"labeled_seg_map_{timestamp}.png")
+                # cv2.imwrite(labeled_seg_file, cv2.cvtColor(labeled_seg_map, cv2.COLOR_RGB2BGR))
+
+            except Exception as e:
+                logging.error(f"세그멘테이션 맵 저장 중 오류 발생: {e}")
+                visible_mapping = {}
+
             ### Convert camera pose to world coordinates
 
             # Get the position and orientation of the end effector (right_hand)
@@ -1489,6 +1627,9 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             # Calculate the camera orientation in world coordinates
             camera_world_rot = ee_rot * camera_local_rot
             camera_world_quat = camera_world_rot.as_quat()
+
+            # # 전체 !!! 세그멘테이션 매핑 정보 가져오기
+            # seg_mapping = self.get_segmentation_mapping()
 
             # save camera pose (realworld)
 
@@ -1538,6 +1679,9 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
                     "camera_extrinsics": str(camera_extrinsics),
                     "object_info": str(self.object_info),  # self.object_info 추가
                     "fixture_info": str(self.fixture_info),  # fixture_info 추가
+                    "visible_segmentation_mapping": str(
+                        visible_mapping
+                    ),  # 세그멘테이션 매핑 정보 추가
                 }
 
                 with open(pose_file, "w") as f:

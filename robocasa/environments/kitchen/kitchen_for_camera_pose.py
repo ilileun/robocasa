@@ -594,7 +594,10 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             self.object_cfgs = addl_obj_cfgs + self.object_cfgs
 
             # # remove objects that didn't get created
-            # self.object_cfgs = [cfg for cfg in self.object_cfgs if "model" in cfg]
+            self.object_cfgs = [cfg for cfg in self.object_cfgs if "model" in cfg]
+            logging.debug("self.object_cfgs: {}".format(self.object_cfgs))
+
+            breakpoint()
         self.placement_initializer = self._get_placement_initializer(self.object_cfgs)
 
         object_placements = None
